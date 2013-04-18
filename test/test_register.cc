@@ -1,6 +1,6 @@
 #include "sync.h"
 
-using namespace update;
+using namespace synchromesh;
 
 struct ABC {
   int a;
@@ -12,5 +12,5 @@ int main() {
   float* a = 0;
   ABC abc;
   register_array("test_1", a, 1);
-  register_struct("test_2", &abc);
+  register_pod("test_2", &abc);
 }
