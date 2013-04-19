@@ -11,6 +11,10 @@ struct ABC {
 int main() {
   float* a = 0;
   ABC abc;
-  register_array("test_1", a, 1);
-  register_pod("test_2", &abc);
+
+  Synchromesh s(NULL);
+  Update* t1 = s.register_array("test_1", a, 1);
+  Update* t2 = s.register_pod("test_2", &abc);
+  t1->copy();
+  t2->copy();
 }

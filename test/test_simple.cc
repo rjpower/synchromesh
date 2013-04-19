@@ -8,18 +8,29 @@ struct ABC {
   int c;
 };
 
-void SimpleUpdate(const UpdateMap& tmp, const UpdateMap& global) {
-  for (auto v : tmp) {
-    fprintf(stderr, "Processing: %s\n", v.first.c_str());
+void SimpleUpdate(UpdateMap& tmp, UpdateMap& global) {
+  LOG("Update function running...");
+  float* f = tmp["test_1"]->as_array<float>();
+  for (int i = 0; i < 10; ++i) {
+    ASSERT_EQ(f[i], i);
   }
+  const ABC& abc = tmp["test_2"]->as<ABC>();
+  ASSERT_EQ(abc.a, 1);
+  ASSERT_EQ(abc.b, 3);
+  ASSERT_EQ(abc.c, 5);
+}
+
+void runner(RPC* rpc) {
+  LOG("Running on worker: %d", rpc->id());
+  Synchromesh m(rpc);
+  float a[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
+  ABC abc = { 1, 3, 5 };
+  m.register_array("test_1", a, 10, false /* not sharded */);
+  m.register_pod("test_2", &abc);
+
+  m.update<SimpleUpdate>(false);
 }
 
 int main() {
-  float a[10] = { 0 };
-  ABC abc;
-  synchromesh::initialize();
-  register_array("test_1", a, 10);
-  register_pod("test_2", &abc);
-
-  synchromesh::update<SimpleUpdate>(false);
+  DummyRPC::run(8, &runner);
 }

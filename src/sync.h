@@ -14,12 +14,10 @@
 namespace synchromesh {
 
 class Update;
-
 typedef std::map<std::string, Update*> UpdateMap;
-typedef void (*UpdateFunction)(const UpdateMap& update, const UpdateMap& global);
 
-void initialize();
-void register_update(const std::string& name, Update* up);
+typedef void (*UpdateFunction)(UpdateMap&, UpdateMap&);
+typedef std::map<int, UpdateFunction> UpdateFunctionMap;
 
 class Update: private boost::noncopyable {
 public:
@@ -34,8 +32,8 @@ public:
   }
 
   virtual void* ptr() = 0;
-  virtual void send(MPIRPC&, int& idx) = 0;
-  virtual void recv(MPIRPC& rpc, int src, int& idx) = 0;
+  virtual void send(RPC&, int& idx) = 0;
+  virtual void recv(RPC& rpc, int src, int& idx) = 0;
 
   virtual Update* copy() = 0;
 };
@@ -58,39 +56,35 @@ public:
     return ptr_;
   }
 
-  void send(MPIRPC& rpc, int& idx) {
-    rpc.send_all(idx++, ptr_, size_);
+  void send(RPC& rpc, int& idx) {
+    rpc.send_all(idx++, (char*) ptr_, size_);
   }
 
-  void recv(MPIRPC& rpc, int src, int& idx) {
+  void recv(RPC& rpc, int src, int& idx) {
     rpc.recv_data(src, idx++, (char*) ptr_, size_);
   }
 
   Update* copy() {
-    return new PODUpdate(ptr_, size_);
+    return new PODUpdate(malloc(size_), size_);
   }
 };
-
-template<class T>
-void register_pod(const std::string& name, const T* val) {
-  register_update(name, new PODUpdate(val));
-}
 
 class ArrayUpdate: public Update {
 private:
   void* ptr_;
   size_t num_elems_;
   size_t elem_size_;
+  bool shardable_;
 
-  ArrayUpdate(void* v, int num_elems, int elem_size) :
-      ptr_(v), num_elems_(num_elems), elem_size_(elem_size) {
+  ArrayUpdate(void* v, int num_elems, int elem_size, bool shardable) :
+      ptr_(v), num_elems_(num_elems), elem_size_(elem_size), shardable_(shardable) {
     ASSERT_GT(num_elems_, 0u);
   }
 
 public:
   template<class T>
-  ArrayUpdate(const T* v, int num_elems) :
-      ptr_((void*) v), num_elems_(num_elems), elem_size_(sizeof(T)) {
+  ArrayUpdate(const T* v, int num_elems, bool shardable) :
+      ptr_((void*) v), num_elems_(num_elems), elem_size_(sizeof(T)), shardable_(shardable) {
     ASSERT_GT(num_elems_, 0u);
   }
 
@@ -98,38 +92,79 @@ public:
     return ptr_;
   }
 
-  void send(MPIRPC& rpc, int& idx) {
-    rpc.send_sharded(idx++, (char*) ptr_, elem_size_, num_elems_);
+  void send(RPC& rpc, int& idx) {
+    if (shardable_) {
+      rpc.send_sharded(idx++, (char*) ptr_, elem_size_, num_elems_);
+    } else {
+      rpc.send_all(idx++, (char*) ptr_, elem_size_ * num_elems_);
+    }
   }
 
-  void recv(MPIRPC& rpc, int src, int& idx) {
-    ShardCalc calc(num_elems_, elem_size_);
-    rpc.recv_data(src, idx++, (char*) ptr_ + calc.start(src), calc.size(src));
+  void recv(RPC& rpc, int src, int& idx) {
+    if (shardable_) {
+      ShardCalc calc(num_elems_, elem_size_, rpc.num_workers());
+      rpc.recv_data(src, idx++, (char*) ptr_ + calc.start(src), calc.size(src));
+    } else {
+      rpc.recv_data(src, idx++, (char*) ptr_, num_elems_ * elem_size_);
+    }
   }
 
   Update* copy() {
-    return new ArrayUpdate(ptr_, num_elems_, elem_size_);
+    return new ArrayUpdate(malloc(num_elems_ * elem_size_), num_elems_, elem_size_, shardable_);
   }
 };
 
-template<class T>
-void register_array(const std::string& name, T* region, size_t num_elems) {
-  register_update(name, new ArrayUpdate(region, num_elems));
-}
+class Synchromesh {
+private:
+  struct UpdateFnRegistrar {
+    UpdateFnRegistrar(UpdateFunction fn);
+  };
 
-namespace internal {
-struct UpdateFnRegistrar {
-  UpdateFnRegistrar(UpdateFunction fn);
+  UpdateMap tmp_;
+  UpdateMap global_;
+  UpdateMap local_;
+
+  static UpdateFunctionMap fn_map_;
+
+  boost::thread* update_worker_;
+  RPC* network_;
+
+  bool stop_recv_loop_;
+
+  // Initially true; reset after the first call to update.
+  //
+  // After initialization no more register_* methods can be called.  This
+  // forces a synchronization point amongst all of the workers, ensuring
+  // all register_* calls have completed before any sync/updates begin.
+  bool first_update_;
+
+  int get_id(UpdateFunction fn);
+  void send_update(UpdateFunction fn, bool wait_for_all);
+  void recv_updates();
+  void recv_data(RPC& rpc, int source);
+
+public:
+  Synchromesh(RPC* network);
+  ~Synchromesh();
+
+  Update* register_update(const std::string& name, Update* up);
+
+  template<class T>
+  Update* register_array(const std::string& name, T* region, size_t num_elems, bool shardable = true) {
+    return register_update(name, new ArrayUpdate(region, num_elems, shardable));
+  }
+
+  template<class T>
+  Update* register_pod(const std::string& name, const T* val) {
+    return register_update(name, new PODUpdate(val));
+  }
+
+  template<UpdateFunction Fn>
+  void update(bool wait_for_all) {
+    static UpdateFnRegistrar register_sync_fn(Fn);
+    send_update(Fn, wait_for_all);
+  }
 };
-
-void send_update(UpdateFunction fn, bool wait_for_all);
-}
-
-template<UpdateFunction Fn>
-void update(bool wait_for_all) {
-  static internal::UpdateFnRegistrar register_sync_fn(Fn);
-  internal::send_update(Fn, wait_for_all);
-}
 
 } // namespace update
 

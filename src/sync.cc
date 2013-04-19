@@ -7,32 +7,34 @@ using std::vector;
 using std::string;
 
 namespace synchromesh {
-namespace internal {
-
-typedef std::map<int, UpdateFunction> UpdateFunctionMap;
-
-static UpdateMap tmp_;
-static UpdateMap global_;
-static UpdateMap local_;
-static UpdateFunctionMap fn_map_;
 
 int get_id(UpdateFunction fn);
 
-const int kUpdateSendStart = 1000;
-const int kUpdateSendData = 1100;
-const int kUpdateRecvData = 1200;
+enum MessageTag {
+  kUpdateInitialize = 1000,
+  kUpdateSendStart = 1001,
+  kUpdateSendData = 1100,
+  kUpdateRecvData = 1200
+};
 
-UpdateFnRegistrar::UpdateFnRegistrar(UpdateFunction fn) {
+UpdateFunctionMap Synchromesh::fn_map_;
+
+Synchromesh::UpdateFnRegistrar::UpdateFnRegistrar(UpdateFunction fn) {
   int sz = fn_map_.size();
   fn_map_[sz] = fn;
 }
 
-struct Options {
+struct SyncOptions {
   bool wait_for_all;
   int update_fn_id;
+  int worker_id;
 };
 
-int get_id(UpdateFunction fn) {
+struct InitOptions {
+
+};
+
+int Synchromesh::get_id(UpdateFunction fn) {
   for (auto itr : fn_map_) {
     if (itr.second == fn) {
       return itr.first;
@@ -41,87 +43,69 @@ int get_id(UpdateFunction fn) {
   return -1;
 }
 
-void send_update(UpdateFunction fn, bool wait_for_all) {
-  MPIRPC rpc;
-  Options opt;
-  opt.wait_for_all = wait_for_all;
-  opt.update_fn_id = get_id(fn);
-
-  rpc.send_all(kUpdateSendStart, &opt, sizeof(opt));
-
-  int idx = kUpdateSendData;
-  for (auto itr : local_) {
-    Update& d = *itr.second;
-    d.send(rpc, idx);
-  }
-}
-
-void recv_data(MPIRPC& rpc, int source) {
+void Synchromesh::recv_data(RPC& rpc, int source) {
   int idx = kUpdateSendData;
   for (auto itr : local_) {
     const string& name = itr.first;
     if (tmp_.find(name) == tmp_.end()) {
       tmp_[name] = itr.second->copy();
     }
-
     Update& tgt = *tmp_[name];
     tgt.recv(rpc, source, idx);
   }
 }
 
-static boost::mutex recv_mutex;
-static boost::condition_variable recv_cv;
-static bool recv_active = true;
+void Synchromesh::send_update(UpdateFunction fn, bool wait_for_all) {
+  if (first_update_) {
+    InitOptions init_opt;
+    network_->send_all(kUpdateInitialize, (char*)&init_opt, sizeof(init_opt));
+    vector<InitOptions> res;
+    network_->recv_all(kUpdateInitialize, &res);
+    first_update_ = false;
+  }
 
-void recv_updates() {
-  MPIRPC rpc;
-  Options opt;
+  SyncOptions opt;
+  opt.wait_for_all = wait_for_all;
+  opt.update_fn_id = get_id(fn);
+  opt.worker_id = network_->id();
+  network_->send_all(kUpdateSendStart, opt);
+  int idx = kUpdateSendData;
+  for (auto itr : local_) {
+    Update& d = *itr.second;
+    d.send(*network_, idx);
+  }
+}
 
-  while (recv_active) {
-    for (int i = 0; i < MPI::COMM_WORLD.Get_size(); ++i) {
-      rpc.recv_pod(MPI::ANY_SOURCE, kUpdateSendStart, &opt);
-      if (opt.wait_for_all) {
-
-      } else {
-        recv_data(rpc, i);
-        fn_map_[opt.update_fn_id](tmp_, global_);
-//        send_data(rpc, i);
-      }
+void Synchromesh::recv_updates() {
+  SyncOptions opt;
+  while (!stop_recv_loop_) {
+    network_->recv_pod(RPC::kAnyWorker, kUpdateSendStart, &opt);
+    if (opt.wait_for_all) {
+      PANIC("Not implemented.");
+    } else {
+      recv_data(*network_, opt.worker_id);
+      fn_map_[opt.update_fn_id](tmp_, global_);
     }
   }
-
-  recv_cv.notify_all();
 }
 
-void shutdown() {
-  boost::unique_lock<boost::mutex> lock(recv_mutex);
-  recv_active = false;
-  recv_cv.wait(lock);
-
-  MPI::Finalize();
+Update* Synchromesh::register_update(const std::string& name, Update* data) {
+  ASSERT_EQ(first_update_, true);
+  local_[name] = data;
+  return data;
 }
 
-} // namespace internal
-} // namespace synchromesh
-
-namespace synchromesh {
-
-void register_update(const std::string& name, Update* data) {
-  internal::local_[name] = data;
+Synchromesh::Synchromesh(RPC* network) {
+  first_update_ = true;
+  network_ = network;
+  stop_recv_loop_ = false;
+  update_worker_ = new boost::thread(&Synchromesh::recv_updates, this);
 }
 
-void initialize() {
-  int is_initialized = 0;
-  MPI_Initialized(&is_initialized);
-
-  if (!is_initialized) {
-    MPI::Init_thread(MPI::THREAD_SERIALIZED);
-  }
-
-  pth_init();
-
-  static boost::thread update_worker(&internal::recv_updates);
-  atexit(&internal::shutdown);
+Synchromesh::~Synchromesh() {
+  stop_recv_loop_ = true;
+  update_worker_->join();
+  delete network_;
 }
 
 } // namespace synchromesh
