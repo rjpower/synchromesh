@@ -16,7 +16,10 @@ export OMPI_CXX
  
 CXX := mpic++ 
 
-LDFLAGS := 
+LDFLAGS :=
+
+src/update_gen.h : src/header_gen.py
+	python src/header_gen.py > $@ 
 
 build/% : test/%.cc build/libsync.a $(HEADERS)
 	$(CXX) $(CXXFLAGS) $(INCLUDE) $< -o $@ -Lbuild/ $(LDFLAGS) -lsync -lpth -lboost_thread

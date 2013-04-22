@@ -212,20 +212,6 @@ public:
   }
 };
 
-template<class A, void (*Fn)(const A&, UpdateMap&, UpdateMap&)>
-class UpdateFunction1: public UpdateFunctionBase {
-private:
-  A a_;
-public:
-  virtual void read_values(SendRecvHelper& rpc, int src) {
-    rpc.recv_pod(src, &a_);
-  }
-
-  virtual void operator()(UpdateMap& a, UpdateMap& b) {
-    Fn(a_, a, b);
-  }
-};
-
 class UpdateFunctionCreator {
 public:
   virtual UpdateFunctionBase* create() = 0;
@@ -296,21 +282,13 @@ public:
     return register_update(name, new PODUpdate(val));
   }
 
-
-  template<class A, void (*Fn)(const A&, UpdateMap&, UpdateMap&)>
-  void update(const A& a) {
-    static RegisterHelper<UpdateFunction1<A, Fn> > register_me;
-    {
-      SendRecvHelper send(kWorkerData, *network_);
-      send.send_all(a);
-      worker_send_update(send, register_me.id());
+  template<void (*Fn)(UpdateMap&, UpdateMap&)>
+  class UpdateFunction0: public UpdateFunctionBase {
+  public:
+    virtual void operator()(UpdateMap& up, UpdateMap& global) {
+      Fn(up, global);
     }
-
-    {
-      SendRecvHelper recv(kSyncerData, *network_);
-      worker_recv_state(recv);
-    }
-  }
+  };
 
   template<void (*Fn)(UpdateMap&, UpdateMap&)>
   void update() {
@@ -325,6 +303,9 @@ public:
       worker_recv_state(recv);
     }
   }
+
+#include "update_gen.h"
+
 };
 
 } // namespace update
