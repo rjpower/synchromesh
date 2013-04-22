@@ -20,6 +20,11 @@ void SimpleUpdate(UpdateMap& tmp, UpdateMap& global) {
   ASSERT_EQ(abc.c, 5);
 }
 
+void SimpleUpdate2(const int& a, UpdateMap& tmp, UpdateMap& global) {
+  SimpleUpdate(tmp, global);
+  ASSERT_EQ(a, 100);
+}
+
 void runner(RPC* rpc) {
   LOG("Running on worker: %d", rpc->id());
   Synchromesh m(rpc);
@@ -28,7 +33,8 @@ void runner(RPC* rpc) {
   m.register_array("test_1", a, 10, false /* not sharded */);
   m.register_pod("test_2", &abc);
 
-  m.update<SimpleUpdate>(false);
+  m.update<SimpleUpdate>();
+  m.update<int, SimpleUpdate2>(100);
 }
 
 int main() {

@@ -9,8 +9,12 @@ TEST_SRC := $(wildcard test/*.cc)
 TESTS := $(patsubst test/%.cc,build/%,$(TEST_SRC))
 
 CFLAGS := -Wall -ggdb2 -pthread
-CXXFLAGS := $(CFLAGS) -std=c++11 
-CXX := mpic++
+CXXFLAGS := $(CFLAGS) -std=c++11
+
+OMPI_CXX=clang++
+export OMPI_CXX
+ 
+CXX := mpic++ 
 
 LDFLAGS := 
 
@@ -23,7 +27,7 @@ build/%.o : src/%.cc $(HEADERS)
 all: build/libsync.a $(TESTS)
 
 test: $(TESTS)
-	for t in $(TESTS); do echo Running $$t; mpirun -n 1 $$t; done
+	for t in $(TESTS); do echo Running $$t; $$t; done
 
 clean:
 	rm -rf build/*

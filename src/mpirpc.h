@@ -34,6 +34,8 @@ public:
   virtual size_t send_data(int dst, int tag, const char* ptr, int bytes) = 0;
   virtual size_t recv_data(int src, int tag, char* ptr, int bytes) = 0;
 
+  virtual bool has_data(int src, int tag) const = 0;
+
   // The first, last and current worker ids.
   virtual int first() const = 0;
   virtual int last() const = 0;
@@ -49,9 +51,9 @@ public:
   }
 
   template<class T>
-  void send_all(int tag, const T* data, int num_bytes) {
+  void send_all(int tag, const T* data, int num_elems) {
     for (int i = first(); i <= last(); ++i) {
-      send_data(i, tag, (char*) data, sizeof(T) * num_bytes);
+      send_data(i, tag, (char*) data, sizeof(T) * num_elems);
     }
   }
 
@@ -129,18 +131,11 @@ public:
 
   size_t send_data(int dst, int tag, const char* ptr, int bytes);
   virtual size_t recv_data(int src, int tag, char* ptr, int bytes);
+  virtual bool has_data(int src, int tag) const;
 
-  virtual int first() const {
-    return 0;
-  }
-
-  virtual int last() const {
-    return _world.Get_size() - 1;
-  }
-
-  virtual int id() const {
-    return _world.Get_rank();
-  }
+  virtual int first() const;
+  virtual int last() const;
+  virtual int id() const;
 };
 
 // Pretend to run MPI using a bunch of threads.
@@ -170,7 +165,8 @@ private:
     }
   }
 
-  size_t has_data(int& src, int& tag);
+  bool has_data_internal(int& src, int& tag) const;
+
 public:
   static void run(int num_workers, boost::function<void(DummyRPC*)> run_f);
 
@@ -192,7 +188,10 @@ public:
 
   size_t recv_data(int src, int tag, char* ptr, int bytes);
   size_t send_data(int dst, int tag, const char* ptr, int bytes);
-};
 
+  bool has_data(int src, int tag) const {
+    return has_data_internal(src, tag);
+  }
+};
 
 #endif /* MPIRPC_H_ */

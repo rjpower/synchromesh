@@ -1,10 +1,17 @@
 #ifndef SYNCHROMESH_UTIL_H_
 #define SYNCHROMESH_UTIL_H_
 
+#include <boost/thread.hpp>
+
+extern boost::recursive_mutex log_mutex;
+
 #define LOG(...)\
+    {\
+    boost::recursive_mutex::scoped_lock log_lock_(log_mutex);\
     fprintf(stderr, "%s:%d -- ", __FILE__, __LINE__);\
     fprintf(stderr, ##__VA_ARGS__);\
-    fprintf(stderr, "\n");
+    fprintf(stderr, "\n");\
+    }
 
 #define PANIC(...)\
     LOG("Something bad happened:");\

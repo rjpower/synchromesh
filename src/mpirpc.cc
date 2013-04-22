@@ -20,10 +20,10 @@ void DummyRPC::run(int num_workers, boost::function<void(DummyRPC*)> run_f) {
   }
 }
 
-size_t DummyRPC::has_data(int& src, int& tag) {
+bool DummyRPC::has_data_internal(int& src, int& tag) const {
   if (src == kAnyWorker) {
     for (int i = 0; i < num_workers_; ++i) {
-      if (has_data(i, tag)) {
+      if (has_data_internal(i, tag)) {
         src = i;
         return true;
       }
@@ -47,12 +47,12 @@ size_t DummyRPC::has_data(int& src, int& tag) {
 size_t DummyRPC::recv_data(int src, int tag, char* ptr, int bytes) {
   ASSERT_GE(bytes, 0);
   if (src == kAnyWorker || tag == kAnyTag) {
-    while (!has_data(src, tag)) {
+    while (!has_data_internal(src, tag)) {
 //      fiber::yield();
       sched_yield();
     }
   }
-  while (!has_data(src, tag)) {
+  while (!has_data_internal(src, tag)) {
     sched_yield();
   }
   Packet p;
@@ -125,6 +125,22 @@ MPIRPC::MPIRPC() :
     MPI::Init_thread(MPI::THREAD_SERIALIZED);
   }
   pth_init();
+}
+
+bool MPIRPC::has_data(int src, int tag) const {
+  return _world.Iprobe(src, tag);
+}
+
+int MPIRPC::first() const {
+  return 0;
+}
+
+int MPIRPC::last() const {
+  return _world.Get_size() - 1;
+}
+
+int MPIRPC::id() const {
+  return _world.Get_rank();
 }
 
 ShardCalc::ShardCalc(int num_elements, int elem_size, int num_workers) :
