@@ -1,41 +1,13 @@
+#ifndef SYNCHROMESH_FIBER_H
+#define SYNCHROMESH_FIBER_H
+
 #include <boost/bind.hpp>
 #include <boost/function.hpp>
 #include <pth.h>
 
+#include "util.h"
+
 // Some trivial wrappers around GNU pth using boost::bind and boost::function.
-#define LOG(...)\
-    fprintf(stderr, "%s:%d -- ", __FILE__, __LINE__);\
-    fprintf(stderr, ##__VA_ARGS__);\
-    fprintf(stderr, "\n");
-
-#define PANIC(...)\
-    LOG("Something bad happened:");\
-    LOG(__VA_ARGS__);\
-    abort();
-
-#define ASSERT(condition, ...)\
-    if (!(condition)) {\
-        LOG("Assertion: " #condition " failed.");\
-        LOG(__VA_ARGS__);\
-        abort();\
-    }
-
-#define ASSERT_COND(a, b, cond)\
-    {\
-    auto at = a;\
-    auto bt = b;\
-    if (!(at cond bt)) {\
-      LOG("Assertion %s %s %s failed. %s = %d, %s = %d", #a, #cond, #b, #a, (int)at, #b, (int)bt);\
-      abort();\
-    }\
-    }
-
-#define ASSERT_EQ(a,b) ASSERT_COND(a,b,==)
-#define ASSERT_GT(a,b) ASSERT_COND(a,b,>)
-#define ASSERT_LT(a,b) ASSERT_COND(a,b,<)
-#define ASSERT_GE(a,b) ASSERT_COND(a,b,>=)
-#define ASSERT_LE(a,b) ASSERT_COND(a,b,<=)
-
 typedef boost::function<void(void)> VoidFn;
 
 namespace fiber {
@@ -76,4 +48,7 @@ static inline void wait(std::vector<pth_t>& fibers) {
 static inline void yield() {
   pth_yield(NULL);
 }
+
 }
+
+#endif /* SYNCHROMESH_FIBER_H */

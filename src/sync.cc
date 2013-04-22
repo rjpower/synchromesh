@@ -8,8 +8,6 @@ using std::string;
 
 namespace synchromesh {
 
-int get_id(UpdateFunction fn);
-
 enum MessageTag {
   kUpdateInitialize = 1000,
   kUpdateSendStart = 1001,
@@ -51,7 +49,7 @@ void Synchromesh::recv_data(RPC& rpc, int source) {
       tmp_[name] = itr.second->copy();
     }
     Update& tgt = *tmp_[name];
-    tgt.recv(rpc, source, idx);
+    tgt.syncer_recv(rpc, source, idx);
   }
 }
 
@@ -72,7 +70,7 @@ void Synchromesh::send_update(UpdateFunction fn, bool wait_for_all) {
   int idx = kUpdateSendData;
   for (auto itr : local_) {
     Update& d = *itr.second;
-    d.send(*network_, idx);
+    d.worker_send(*network_, idx);
   }
 }
 

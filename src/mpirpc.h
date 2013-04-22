@@ -81,6 +81,11 @@ public:
   }
 
   template<class T>
+  void send_array(int dst, int tag, T* data, int num_elems) {
+    ASSERT_EQ(send_data(dst, tag, (char*)data, num_elems * sizeof(T)), num_elems * sizeof(T));
+  }
+
+  template<class T>
   void recv_array(int src, int tag, T* data, int num_elems) {
     ASSERT_EQ(recv_data(src, tag, (char*)data, num_elems * sizeof(T)), num_elems * sizeof(T));
   }

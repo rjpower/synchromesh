@@ -1,12 +1,11 @@
-#ifndef SYNC_H_
-#define SYNC_H_
+#ifndef SYNCHROMESH_SYNC_H
+#define SYNCHROMESH_SYNC_H
 
 #include <string>
 #include <map>
 #include <vector>
 
 #include <stddef.h>
-
 #include <boost/noncopyable.hpp>
 
 #include "mpirpc.h"
@@ -32,8 +31,11 @@ public:
   }
 
   virtual void* ptr() = 0;
-  virtual void send(RPC&, int& idx) = 0;
-  virtual void recv(RPC& rpc, int src, int& idx) = 0;
+  virtual void worker_send(RPC&, int& idx) = 0;
+  virtual void worker_recv(RPC&, int& idx) = 0;
+
+  virtual void syncer_recv(RPC& rpc, int src, int& idx) = 0;
+  virtual void syncer_send(RPC& rpc, int src, int& idx) = 0;
 
   virtual Update* copy() = 0;
 };
@@ -56,11 +58,19 @@ public:
     return ptr_;
   }
 
-  void send(RPC& rpc, int& idx) {
+  void worker_send(RPC& rpc, int& idx) {
     rpc.send_all(idx++, (char*) ptr_, size_);
   }
 
-  void recv(RPC& rpc, int src, int& idx) {
+  void worker_recv(RPC& rpc, int& idx) {
+    // Which sync server should I read from?
+    // For now, just assume server 0 is the canonical.
+//    rpc.recv_data(0, idx++, (char*) ptr_, size_);
+  }
+
+  void syncer_send(RPC& rpc, int dst, int& idx) {
+  }
+  void syncer_recv(RPC& rpc, int src, int& idx) {
     rpc.recv_data(src, idx++, (char*) ptr_, size_);
   }
 
@@ -92,7 +102,7 @@ public:
     return ptr_;
   }
 
-  void send(RPC& rpc, int& idx) {
+  void worker_send(RPC& rpc, int& idx) {
     if (shardable_) {
       rpc.send_sharded(idx++, (char*) ptr_, elem_size_, num_elems_);
     } else {
@@ -100,13 +110,21 @@ public:
     }
   }
 
-  void recv(RPC& rpc, int src, int& idx) {
+  void worker_recv(RPC& rpc, int& idx) {
+
+  }
+
+  void syncer_recv(RPC& rpc, int src, int& idx) {
     if (shardable_) {
       ShardCalc calc(num_elems_, elem_size_, rpc.num_workers());
       rpc.recv_data(src, idx++, (char*) ptr_ + calc.start(src), calc.size(src));
     } else {
       rpc.recv_data(src, idx++, (char*) ptr_, num_elems_ * elem_size_);
     }
+  }
+
+  void syncer_send(RPC& rpc, int dst, int& idx) {
+
   }
 
   Update* copy() {
@@ -168,4 +186,4 @@ public:
 
 } // namespace update
 
-#endif /* SYNC_H_ */
+#endif /* SYNCHROMESH_SYNC_H */
