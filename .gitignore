@@ -1,2 +1,5 @@
 build/
 src/update_gen.h
+.cproject
+.project
+.settings/

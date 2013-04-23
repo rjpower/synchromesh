@@ -2,7 +2,7 @@ $(shell mkdir -p build)
 
 SRC := $(wildcard src/*.cc)
 HEADERS := $(wildcard */*.h) Makefile src/update_gen.h
-INCLUDE := -I. -Isrc -Impi-rpc 
+INCLUDE := -I. -Isrc -Impi-rpc
 OBJ := $(patsubst src/%.cc,build/%.o,$(SRC))
 
 TEST_SRC := $(wildcard test/*.cc)
@@ -13,8 +13,8 @@ CXXFLAGS := $(CFLAGS) -std=c++11
 
 OMPI_CXX=clang++
 export OMPI_CXX
- 
-CXX := mpic++ 
+
+CXX := mpic++
 
 LDFLAGS :=
 
@@ -27,7 +27,7 @@ build/%.o : src/%.cc $(HEADERS)
 all: build/libsynchromesh.a $(TESTS)
 
 src/update_gen.h : src/header_gen.py
-	python src/header_gen.py > $@ 
+	python src/header_gen.py > $@
 
 test: $(TESTS)
 	for t in $(TESTS); do echo Running $$t; $$t; done
