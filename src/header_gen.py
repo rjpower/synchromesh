@@ -21,7 +21,7 @@ tmpl = '''
     }
   };
 
-  template<%(classes)s, void (*Fn)(const A&, UpdateMap&, UpdateMap&)>
+  template<%(classes)s, void (*Fn)(%(decls)s, UpdateMap&, UpdateMap&)>
   void update(%(decls)s) {
     static RegisterHelper<UpdateFunction%(arity)s<%(classnames)s, Fn> > register_me;
     {

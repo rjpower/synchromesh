@@ -49,6 +49,9 @@ static inline void yield() {
   pth_yield(NULL);
 }
 
+static inline void init() {
+  pth_init();
+}
 }
 
 #endif /* SYNCHROMESH_FIBER_H */

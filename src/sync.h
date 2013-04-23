@@ -16,63 +16,89 @@ class Update;
 typedef std::map<std::string, Update*> UpdateMap;
 
 enum MessageTag {
-  kUpdateInitialize = 1000,
-  kUpdateSendStart = 1001,
-  kWorkerData = 1100,
-  kSyncerData = 1200
+  kInitBarrier = 1000,
+  kInitStart = 1001,
+  kInitDone = 1002,
+  kInitData = 1003,
+  kUpdateStart = 1100,
+  kWorkerData = 1101,
+  kSyncerData = 1200,
+  kBarrier = 1300
 };
 
 // Helper for performing symmetric send/receives.
 // Increments 'tag' for each RPC call.
-class SendRecvHelper {
-  RPC& rpc_;
+class SendRecvHelper : private boost::noncopyable {
+private:
+  RPC& net_;
   int tag_;
 
-private:
-
 public:
+  int id() {
+    return net_.id();
+  }
+
+  RPC& network() {
+      return net_;
+  }
+
   SendRecvHelper(int tag, RPC& rpc) :
-      rpc_(rpc), tag_(tag) {
+      net_(rpc), tag_(tag) {
   }
 
   int num_workers() const {
-    return rpc_.num_workers();
+    return net_.num_workers();
   }
 
   template<class T>
   void send_all(const T& v) {
-    rpc_.send_all(tag_++, v);
+    net_.send_all(tag_++, v);
   }
 
   template<class T>
   void send_all(const T* ptr, int num_elems) {
-    rpc_.send_all(tag_++, ptr, num_elems);
+    net_.send_all(tag_++, ptr, num_elems);
   }
 
   template<class T>
   void send_sharded(const T* v, int num_elems) {
-    rpc_.send_sharded(tag_++, v, num_elems);
+    net_.send_sharded(tag_++, v, num_elems);
   }
 
   void send_sharded(const char* v, int elem_size, int num_elems) {
-    rpc_.send_sharded(tag_++, v, elem_size, num_elems);
+    net_.send_sharded(tag_++, v, elem_size, num_elems);
+  }
+
+  template <class T>
+  void send_array(int dst, const T* ptr, int num_elems) {
+    net_.send_array(dst, tag_++, ptr, num_elems);
   }
 
   template<class T>
   void recv_pod(int src, T* v) {
-    rpc_.recv_pod(src, tag_++, v);
+    net_.recv_pod(src, tag_++, v);
   }
 
   template<class T>
   T recv_pod(int src) {
     T v;
-    rpc_.recv_pod(src, tag_++, v);
+    net_.recv_pod(src, tag_++, v);
     return v;
   }
 
   template<class T>
   void recv_array(int src, T* v, int num_elems) {
-    rpc_.recv_array(src, tag_++, v, num_elems);
+    net_.recv_array(src, tag_++, v, num_elems);
+  }
+
+  template <class T>
+  void recv_sharded(T* v, int num_elems) {
+    net_.recv_sharded(tag_++, v, num_elems);
+  }
+
+  template <class T>
+  void recv_all(std::vector<T>* vals) {
+    net_.recv_all(tag_++, vals);
   }
 };
 
@@ -89,11 +115,19 @@ public:
   }
 
   virtual void* ptr() = 0;
+
+  virtual void worker_init(SendRecvHelper& rpc) {
+//    worker_send(rpc);
+  }
+
+  virtual void syncer_init(SendRecvHelper&) {
+  }
+
   virtual void worker_send(SendRecvHelper&) = 0;
   virtual void worker_recv(SendRecvHelper&) = 0;
 
   virtual void syncer_recv(SendRecvHelper&, int src) = 0;
-  virtual void syncer_send(SendRecvHelper&, int src) = 0;
+  virtual void syncer_send(SendRecvHelper&, int dst) = 0;
 
   virtual Update* copy() = 0;
 };
@@ -173,7 +207,7 @@ public:
   void syncer_recv(SendRecvHelper& rpc, int src) {
     if (shardable_) {
       ShardCalc calc(num_elems_, elem_size_, rpc.num_workers());
-      rpc.recv_array(src, (char*) ptr_ + calc.start(src), calc.size(src));
+      rpc.recv_array(src, (char*) ptr_ + calc.start_byte(src), calc.num_bytes(src));
     } else {
       rpc.recv_array(src, (char*) ptr_, num_elems_ * elem_size_);
     }
@@ -217,14 +251,16 @@ public:
   virtual UpdateFunctionBase* create() = 0;
 };
 
+static inline void NoOp(UpdateMap& inc, UpdateMap& global) {}
+
 class Synchromesh {
 private:
   UpdateMap tmp_;
   UpdateMap global_;
   UpdateMap local_;
 
-  typedef std::map<int, UpdateFunctionCreator*> UpdateFunctionMap;
-  static UpdateFunctionMap fn_map_;
+  static int fn_max_;
+  static UpdateFunctionCreator* fn_map_[16];
 
   template<class T>
   class RegisterHelper: public UpdateFunctionCreator {
@@ -232,7 +268,7 @@ private:
     int id_;
   public:
     RegisterHelper() {
-      id_ = fn_map_.size();
+      id_ = fn_max_++;
       fn_map_[id_] = this;
     }
 
@@ -249,13 +285,7 @@ private:
   RPC* network_;
 
   bool stop_recv_loop_;
-
-// Initially true; reset after the first call to update.
-//
-// After initialization no more register_* methods can be called.  This
-// forces a synchronization point amongst all of the workers, ensuring
-// all register_* calls have completed before any sync/updates begin.
-  bool first_update_;
+  bool initialized_;
 
   void wait_for_initialization();
   void worker_send_update(SendRecvHelper& rpc, int update_fn_id);
@@ -265,6 +295,8 @@ private:
   void syncer_send_state(SendRecvHelper& rpc, int source);
 
   void syncer_loop();
+
+  void do_init(int id);
 
 public:
   Synchromesh(RPC* network);
@@ -302,6 +334,12 @@ public:
       SendRecvHelper recv(kSyncerData, *network_);
       worker_recv_state(recv);
     }
+  }
+
+  template<void (*Fn)(UpdateMap&, UpdateMap&)>
+  void init() {
+    static RegisterHelper<UpdateFunction0<Fn> > register_me;
+    do_init(register_me.id());
   }
 
 #include "update_gen.h"

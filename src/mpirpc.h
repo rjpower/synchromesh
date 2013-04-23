@@ -19,9 +19,14 @@ private:
 
 public:
   ShardCalc(int num_elements, int elem_size, int num_workers);
-  size_t start(int worker);
-  size_t end(int worker);
-  size_t size(int worker);
+  size_t start_elem(int worker);
+  size_t start_byte(int worker);
+
+  size_t end_elem(int worker);
+  size_t end_byte(int worker);
+
+  size_t num_elems(int worker);
+  size_t num_bytes(int worker);
 };
 
 class RPC {
@@ -61,13 +66,13 @@ public:
     ShardCalc calc(num_elems, elem_size, num_workers());
     for (int j = 0; j < num_workers(); ++j) {
       int dst = first() + j;
-      send_data(dst, tag, data + calc.start(j), calc.size(j));
+      send_data(dst, tag, data + calc.start_byte(j), calc.num_bytes(j));
     }
   }
 
   template<class T>
   void send_sharded(int tag, const T* data, int num_elems) {
-    send_sharded(tag, data, sizeof(T), num_elems);
+    send_sharded(tag, (char*)data, sizeof(T), num_elems);
   }
 
   template<class T>
@@ -111,7 +116,7 @@ public:
     ShardCalc calc(num_elems, sizeof(T), num_servers);
     for (int j = 0; j < num_servers; ++j) {
       int src = first() + j;
-      recv_data(src, tag, data + calc.start(j), calc.size(j));
+      recv_data(src, tag, (char*)(data + calc.start_elem(j)), calc.num_bytes(j));
     }
   }
 
@@ -121,7 +126,8 @@ public:
 
 class MPIRPC: public RPC {
 private:
-  MPI::Intracomm _world;
+  MPI::Intracomm world_;
+  boost::mutex mut_;
 
 public:
   MPIRPC();
@@ -144,25 +150,21 @@ class DummyRPC: public RPC {
 private:
   static int num_workers_;
   static std::vector<DummyRPC*> workers_;
-
-  static const int kMaxTagId = 4096;
-
-  boost::recursive_mutex mut_;
+  static std::vector<boost::thread*> threads_;
 
   typedef std::string Packet;
   typedef std::deque<Packet> PacketList;
-  typedef std::vector<PacketList> TagMap;
-  typedef std::vector<TagMap> DataMap;
+  typedef std::map<int, PacketList> TagMap;
+  typedef std::map<int, TagMap> DataMap;
 
-  DataMap data_;
+  // So we can use operator[]
+  mutable DataMap data_;
+  mutable boost::recursive_mutex mut_;
+
   int worker_id_;
 
   DummyRPC(int worker_id) {
     worker_id_ = worker_id;
-    data_.resize(num_workers_);
-    for (size_t i = 0; i < data_.size(); ++i) {
-      data_[i].resize(kMaxTagId);
-    }
   }
 
   bool has_data_internal(int& src, int& tag) const;
@@ -170,9 +172,7 @@ private:
 public:
   static void run(int num_workers, boost::function<void(DummyRPC*)> run_f);
 
-  virtual ~DummyRPC() {
-
-  }
+  virtual ~DummyRPC();
 
   int first() const {
     return 0;

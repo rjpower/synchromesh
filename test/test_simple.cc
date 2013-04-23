@@ -33,10 +33,15 @@ void runner(RPC* rpc) {
   m.register_array("test_1", a, 10, false /* not sharded */);
   m.register_pod("test_2", &abc);
 
+  m.init<NoOp>();
   m.update<SimpleUpdate>();
   m.update<int, SimpleUpdate2>(100);
 }
 
-int main() {
-  DummyRPC::run(8, &runner);
+int main(int argc, char** argv) {
+  if (MPI::Init_thread(argc, argv, MPI_THREAD_MULTIPLE) == MPI_SUCCESS) {
+    runner(new MPIRPC);
+  } else {
+    DummyRPC::run(8, &runner);
+  }
 }
