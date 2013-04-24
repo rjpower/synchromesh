@@ -7,7 +7,7 @@ C++ is a pain.
 
 tmpl = '''
   template<%(classes)s, void (*Fn)(%(decls)s, UpdateMap&, UpdateMap&)>
-  class UpdateFunction%(arity)s: public UpdateFunctionBase {
+  class UpdateFunction%(arity)s: public UpdateFunction {
   private:
     %(ivar_decls)s
   public:
@@ -23,7 +23,7 @@ tmpl = '''
 
   template<%(classes)s, void (*Fn)(%(decls)s, UpdateMap&, UpdateMap&)>
   void update(%(decls)s) {
-    static RegisterHelper<UpdateFunction%(arity)s<%(classnames)s, Fn> > register_me;
+    static UpdateFunctionRegistry::Helper<UpdateFunction%(arity)s<%(classnames)s, Fn> > register_me;
     {
       SendRecvHelper send(kWorkerData, *network_);
       %(sends)s

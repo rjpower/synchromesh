@@ -8,9 +8,6 @@ using std::string;
 
 namespace synchromesh {
 
-int Synchromesh::fn_max_ = 0;
-UpdateFunctionCreator* Synchromesh::fn_map_[16];
-
 struct SyncOptions {
   bool wait_for_all;
   int update_fn_id;
@@ -35,45 +32,8 @@ static void barrier(RPC* net) {
 }
 
 void Synchromesh::do_init(int id) {
-  LOG("worker -> init");
-  // Barrier; wait for all register_ calls to complete.
-  InitOptions init_opt = { id };
-  network_->send_all(kInitBarrier, (char*) &init_opt, sizeof(init_opt));
-
-  {
-    vector<InitOptions> res;
-    network_->recv_all(kInitBarrier, &res);
-  }
-
-  // Send initial state to sync servers.
-  SendRecvHelper rpc(kInitData, *network_);
-  rpc.send_all(init_opt);
-  for (auto itr : local_) {
-    Update& d = *itr.second;
-    d.worker_init(rpc);
-  }
-
-  // Wait for initialization to finish.
-  {
-    vector<InitFinished> res;
-    network_->recv_all(kInitDone, &res);
-  }
-
-  initialized_ = true;
-}
-
-void Synchromesh::syncer_recv_update(SendRecvHelper& rpc, int source) {
-  LOG("sync <- worker");
-  for (auto itr : tmp_) {
-    itr.second->syncer_recv(rpc, source);
-  }
-}
-
-void Synchromesh::syncer_send_state(SendRecvHelper& rpc, int dst) {
-  LOG("sync -> worker");
-  for (auto itr : global_) {
-    itr.second->syncer_send(rpc, dst);
-  }
+  LOG("worker -> init_barrier");
+  barrier(network_);
 }
 
 void Synchromesh::worker_send_update(SendRecvHelper& rpc, int update_fn_id) {
@@ -84,43 +44,39 @@ void Synchromesh::worker_send_update(SendRecvHelper& rpc, int update_fn_id) {
   opt.update_fn_id = update_fn_id;
   opt.worker_id = network_->id();
   network_->send_all(kUpdateStart, opt);
+  
   for (auto itr : local_) {
-    Update& d = *itr.second;
-    d.worker_send(rpc);
+    Data& d = *itr.second;
+    rpc.send_all(d.id());
+    rpc.send_all(itr.first);
+    d.send(rpc);
   }
 }
 
 void Synchromesh::worker_recv_state(SendRecvHelper& rpc) {
   LOG("worker <- sync");
   for (auto itr : local_) {
-    Update& d = *itr.second;
-    d.worker_recv(rpc);
+    Data& d = *itr.second;
+    d.recv(rpc);
   }
 }
 
-void Synchromesh::syncer_loop() {
-  // Wait for initialization messages from each worker
-  {
-    SendRecvHelper rpc(kInitData, *network_);
-    vector<InitOptions> opt;
-    rpc.recv_all(&opt);
+void SyncServer::recv_update(SendRecvHelper& rpc, int src) {
+  LOG("sync <- worker");
 
-    for (auto itr : local_) {
-      const string& name = itr.first;
-      tmp_[name] = itr.second->copy();
-      tmp_[name]->syncer_init(rpc);
-      global_[name] = tmp_[name]->copy();
-    }
-
-    UpdateFunctionBase* f = fn_map_[opt[0].init_fn_id]->create();
-    (*f)(tmp_, global_);
-
-    InitFinished init_f;
-    network_->send_all(kInitDone, init_f);
+  for (auto itr : tmp_) {
+    itr.second->syncer_recv(rpc, source);
   }
+}
 
-  LOG("Initialization finished.");
+void SyncServer::send_state(SendRecvHelper& rpc, int dst) {
+  LOG("sync -> worker");
+  for (auto itr : global_) {
+    itr.second->syncer_send(rpc, dst);
+  }
+}
 
+void SyncServer::loop() {
   while (!stop_recv_loop_) {
     if (!network_->has_data(RPC::kAnyWorker, kUpdateStart)) {
       sched_yield();
@@ -132,23 +88,31 @@ void Synchromesh::syncer_loop() {
     if (opt.wait_for_all) {
       PANIC("Not implemented.");
     } else {
-      UpdateFunctionCreator* creator = fn_map_[opt.update_fn_id];
-      UpdateFunctionBase* fn = creator->create();
+      UpdateFunction* fn = UpdateFunctionRegistry::create(opt.update_fn_id);
       {
         SendRecvHelper rpc(kWorkerData, *network_);
         fn->read_values(rpc, opt.worker_id);
-        syncer_recv_update(rpc, opt.worker_id);
+        recv_update(rpc, opt.worker_id);
       }
       (*fn)(tmp_, global_);
       {
         SendRecvHelper rpc(kSyncerData, *network_);
-        syncer_send_state(rpc, opt.worker_id);
+        send_state(rpc, opt.worker_id);
       }
     }
   }
 }
 
-Update* Synchromesh::register_update(const std::string& name, Update* data) {
+void SyncServer::stop() {
+  stop_recv_loop_ = true;
+  thread_->join();
+}
+
+void SyncServer::start() {
+
+}
+
+Data* Synchromesh::register_update(const std::string& name, Data* data) {
   ASSERT_EQ(initialized_, false);
   local_[name] = data;
   return data;
@@ -157,15 +121,14 @@ Update* Synchromesh::register_update(const std::string& name, Update* data) {
 Synchromesh::Synchromesh(RPC* network) {
   initialized_ = false;
   network_ = network;
-  stop_recv_loop_ = false;
-  update_worker_ = new boost::thread(&Synchromesh::syncer_loop, this);
+  server_ = new SyncServer(network_);
 }
 
 Synchromesh::~Synchromesh() {
-  stop_recv_loop_ = true;
-  update_worker_->join();
   barrier(network_);
+  server_->stop();
   delete network_;
+
 }
 
 } // namespace synchromesh

@@ -46,6 +46,9 @@ public:
   virtual int last() const = 0;
   virtual int id() const = 0;
 
+  // Wait for any outstanding operations to complete.
+  virtual void wait() = 0;
+
   virtual int num_workers() const {
     return last() - first() + 1;
   }
@@ -53,6 +56,20 @@ public:
   // Wait for outstanding requests and shutdown the network.
   virtual ~RPC() {
 
+  }
+
+  void send_str(int dst, int tag, const std::string& str) {
+    send_pod(dst, tag, str.size());
+    send_array(dst, tag, str.data(), str.size());
+  }
+
+  std::string recv_str(int src, int tag) {
+    std::string v;
+    int len;
+    recv_pod(src, tag, &len);
+    v.resize(len);
+    recv_array(src, tag, &v[0], v.size());
+    return v;
   }
 
   template<class T>
@@ -124,6 +141,98 @@ public:
   bool maybe_recv(int src, int tag, T* data, MPI::Status& st);
 };
 
+// Helper for performing symmetric send/receives.
+// Increments 'tag' for each RPC call.
+class SendRecvHelper : private boost::noncopyable {
+private:
+  RPC& net_;
+  int tag_;
+
+public:
+  int id() {
+    return net_.id();
+  }
+
+  RPC& network() {
+      return net_;
+  }
+
+  SendRecvHelper(int tag, RPC& rpc) :
+      net_(rpc), tag_(tag) {
+  }
+
+  int num_workers() const {
+    return net_.num_workers();
+  }
+
+  void send_str(int dst, const std::string& str) {
+    net_.send_str(dst, tag_++, str);
+  }
+
+  std::string recv_str(int src) {
+    return net_.recv_str(src, tag_++);
+  }
+
+  template<class T>
+  void send_all(const T& v) {
+    net_.send_all(tag_++, v);
+  }
+
+  void send_all(const std::string& str) {
+    for (int i = net_.first(); i <= net_.last(); ++i) {
+      net_.send_str(i, tag_, str);
+    }
+    ++tag_;
+  }
+
+  template<class T>
+  void send_all(const T* ptr, int num_elems) {
+    net_.send_all(tag_++, ptr, num_elems);
+  }
+
+  template<class T>
+  void send_sharded(const T* v, int num_elems) {
+    net_.send_sharded(tag_++, v, num_elems);
+  }
+
+  void send_sharded(const char* v, int elem_size, int num_elems) {
+    net_.send_sharded(tag_++, v, elem_size, num_elems);
+  }
+
+  template <class T>
+  void send_array(int dst, const T* ptr, int num_elems) {
+    net_.send_array(dst, tag_++, ptr, num_elems);
+  }
+
+  template<class T>
+  void recv_pod(int src, T* v) {
+    net_.recv_pod(src, tag_++, v);
+  }
+
+  template<class T>
+  T recv_pod(int src) {
+    T v;
+    net_.recv_pod(src, tag_++, v);
+    return v;
+  }
+
+  template<class T>
+  void recv_array(int src, T* v, int num_elems) {
+    net_.recv_array(src, tag_++, v, num_elems);
+  }
+
+  template <class T>
+  void recv_sharded(T* v, int num_elems) {
+    net_.recv_sharded(tag_++, v, num_elems);
+  }
+
+  template <class T>
+  void recv_all(std::vector<T>* vals) {
+    net_.recv_all(tag_++, vals);
+  }
+};
+
+
 class MPIRPC: public RPC {
 private:
   MPI::Intracomm world_;
@@ -136,12 +245,14 @@ public:
   }
 
   size_t send_data(int dst, int tag, const char* ptr, int bytes);
-  virtual size_t recv_data(int src, int tag, char* ptr, int bytes);
-  virtual bool has_data(int src, int tag) const;
+  size_t recv_data(int src, int tag, char* ptr, int bytes);
+  bool has_data(int src, int tag) const;
 
-  virtual int first() const;
-  virtual int last() const;
-  virtual int id() const;
+  int first() const;
+  int last() const;
+  int id() const;
+
+  void wait();
 };
 
 // Pretend to run MPI using a bunch of threads.
@@ -173,6 +284,10 @@ public:
   static void run(int num_workers, boost::function<void(DummyRPC*)> run_f);
 
   virtual ~DummyRPC();
+
+  void wait() {
+
+  }
 
   int first() const {
     return 0;

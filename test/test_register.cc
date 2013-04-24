@@ -13,12 +13,8 @@ void test_register(RPC* rpc) {
   ABC abc;
 
   Synchromesh s(rpc);
-  Update* t1 = s.register_array("test_1", a, 1);
-  Update* t2 = s.register_pod("test_2", &abc);
-  t1->copy();
-  t2->copy();
-
-  s.init<NoOp>();
+  s.register_array("test_1", a, 1);
+  s.register_pod("test_2", &abc);
 }
 
 int main() {

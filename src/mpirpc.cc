@@ -82,6 +82,10 @@ size_t DummyRPC::send_data(int dst, int tag, const char* ptr, int bytes) {
   return bytes;
 }
 
+void MPIRPC::wait() {
+
+}
+
 size_t MPIRPC::recv_data(int src, int tag, char* ptr, int bytes) {
 
   ASSERT(src <= last(), "Target not a valid worker index");
@@ -92,18 +96,18 @@ size_t MPIRPC::recv_data(int src, int tag, char* ptr, int bytes) {
     tag = MPI::ANY_TAG;
   }
   LOG("Receiving from: %d %d %p %d", src, tag, ptr, bytes);
-  MPI::Status status;
-  while (1) {
-    sched_yield();
-    boost::mutex::scoped_lock lock(mut_);
-    if (world_.Iprobe(src, tag, status)) {
-      break;
-    }
-  }
-
-  boost::mutex::scoped_lock lock(mut_);
-  ASSERT_EQ(status.Get_count(MPI::CHAR), bytes);
+//  while (1) {
+//    sched_yield();
+//    boost::mutex::scoped_lock lock(mut_);
+//    if (world_.Iprobe(src, tag)) {
+//      break;
+//    }
+//  }
+//
+//  boost::mutex::scoped_lock lock(mut_);
+//  LOG("Recv START: %d %d %p %d", src, tag, ptr, bytes);
   world_.Recv(ptr, bytes, MPI::CHAR, src, tag);
+  LOG("Recv DONE: %d %d %p %d", src, tag, ptr, bytes);
   return bytes;
 }
 
@@ -116,23 +120,23 @@ size_t MPIRPC::send_data(int dst, int tag, const char* ptr, int bytes) {
   if (tag == kAnyTag) {
     tag = MPI::ANY_TAG;
   }
-  LOG("Sending to: %d %d %p %d", dst, tag, ptr, bytes);
 
   MPI::Request pending;
-  MPI::Status status;
-
-  {
-    boost::mutex::scoped_lock lock(mut_);
-    pending = world_.Isend(ptr, bytes, MPI::CHAR, dst, tag);
-  }
-
-  while (1) {
-    sched_yield();
-    boost::mutex::scoped_lock lock(mut_);
-    if (pending.Test(status)) {
-      break;
-    }
-  }
+  world_.Send(ptr, bytes, MPI::CHAR, dst, tag);
+//  {
+//    boost::mutex::scoped_lock lock(mut_);
+//    LOG("Sending to: %d %d %p %d", dst, tag, ptr, bytes);
+//    pending = world_.Isend(ptr, bytes, MPI::CHAR, dst, tag);
+//  }
+//
+//  while (1) {
+//    sched_yield();
+//    boost::mutex::scoped_lock lock(mut_);
+//    if (pending.Test()) {
+//      break;
+//    }
+//  }
+  LOG("Send done to: %d %d %p %d", dst, tag, ptr, bytes);
   return bytes;
 }
 
