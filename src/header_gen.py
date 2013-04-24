@@ -45,12 +45,12 @@ for arity in range(1, 9):
   classes = ','.join(['class %s' % classname(i) for i in range(arity)])
   classnames = ','.join(['%s' % classname(i) for i in range(arity)])
 
-  ivar_decls = ';\n'.join(['%s %s' % (classname(i), ivarname(i)) for i in range(arity)]) + ';'
+  ivar_decls = ';\n    '.join(['%s %s' % (classname(i), ivarname(i)) for i in range(arity)]) + ';'
   ivars = ','.join([ivarname(i) for i in range(arity)])
 
   decls = ','.join(['const %s& %s' % (classname(i), varname(i)) for i in range(arity)])
-  sends = ';\n'.join(['send.send_all(%s)' % varname(i) for i in range(arity)]) + ';'
-  recvs = ';\n'.join(['rpc.recv_pod(src, &%s)' % ivarname(i) for i in range(arity)]) + ';'
+  sends = ';\n      '.join(['send.send_all(%s)' % varname(i) for i in range(arity)]) + ';'
+  recvs = ';\n      '.join(['rpc.recv_pod(src, &%s)' % ivarname(i) for i in range(arity)]) + ';'
   call = 'Fn(%s, up, global);' % ivars
   
   print tmpl % locals()

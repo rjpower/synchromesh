@@ -6,8 +6,9 @@
 
 using namespace synchromesh;
 
-void NbodyUpdate(const int& n, const int& my_id, UpdateMap& tmp, UpdateMap& global) {
+void NbodyUpdate(const int& n, const int& my_id, const int& n_workers, UpdateMap& tmp, UpdateMap& global) {
   // TODO
+  ShardCalc shard_calc(n, sizeof(double), n_workers);
   double* x = tmp["x"]->as_array<double>();
   double* y = tmp["y"]->as_array<double>();
   double* z = tmp["z"]->as_array<double>();
@@ -28,7 +29,11 @@ void runner(RPC* rpc) {
 
   const int n = 10;  // n body
   double x[n], y[n], z[n];
-  for (int i = 0; i < n; i++) {
+  memset(x, 0, sizeof(x));
+  memset(y, 0, sizeof(y));
+  memset(z, 0, sizeof(z));
+  ShardCalc shard_calc(n, sizeof(double), rpc->num_workers());
+  for (int i = shard_calc.start_elem(rpc->id()); i < shard_calc.end_elem(rpc->id()); i++) {
     x[i] = rand() * 2.0 / RAND_MAX - 1.0;
     y[i] = rand() * 2.0 / RAND_MAX - 1.0;
     z[i] = rand() * 2.0 / RAND_MAX - 1.0;
@@ -45,7 +50,7 @@ void runner(RPC* rpc) {
   }
 
   for (int round = 0; round < 10; round++) {
-    m.update<int, int, NbodyUpdate>(n, rpc->id());
+    m.update<int, int, int, NbodyUpdate>(n, rpc->id(), rpc->num_workers());
   }
 }
 
