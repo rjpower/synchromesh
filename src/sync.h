@@ -43,7 +43,7 @@ private:
 public:
   static int register_fn(UpdateFunctionCreator*);
   static UpdateFunction* create(int id);
-  
+
   template<class T>
   class Helper {
   private:

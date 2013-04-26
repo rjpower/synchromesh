@@ -52,5 +52,5 @@ for arity in range(1, 9):
   sends = ';\n      '.join(['send.send_all(%s)' % varname(i) for i in range(arity)]) + ';'
   recvs = ';\n      '.join(['rpc.recv_pod(src, &%s)' % ivarname(i) for i in range(arity)]) + ';'
   call = 'Fn(%s, up, global);' % ivars
-  
+
   print tmpl % locals()

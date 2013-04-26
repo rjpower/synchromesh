@@ -44,7 +44,7 @@ void Synchromesh::worker_send_update(SendRecvHelper& rpc, int update_fn_id) {
   opt.update_fn_id = update_fn_id;
   opt.worker_id = network_->id();
   network_->send_all(kUpdateStart, opt);
-  
+
   for (auto itr : local_) {
     Data& d = *itr.second;
     rpc.send_all(d.id());
