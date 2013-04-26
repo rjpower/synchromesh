@@ -1,4 +1,4 @@
-#include "mpirpc.h"
+#include "rpc.h"
 
 int DummyRPC::num_workers_;
 std::vector<DummyRPC*> DummyRPC::workers_;
@@ -67,7 +67,7 @@ size_t DummyRPC::recv_data(int src, int tag, char* ptr, int bytes) {
     p = pl.front();
     pl.pop_front();
   }
-  ASSERT_EQ((int)p.size(), bytes);
+  ASSERT_EQ((int) p.size(), bytes);
   memcpy(ptr, p.data(), p.size());
   return p.size();
 }
@@ -80,6 +80,22 @@ size_t DummyRPC::send_data(int dst, int tag, const char* ptr, int bytes) {
     pl.push_back(Packet(ptr, bytes));
   }
   return bytes;
+}
+
+int DummyRPC::first() const {
+  return 0;
+}
+
+int DummyRPC::last() const {
+  return num_workers_ - 1;
+}
+
+int DummyRPC::id() const {
+  return worker_id_;
+}
+
+bool DummyRPC::has_data(int src, int tag) const {
+  return has_data_internal(src, tag);
 }
 
 void MPIRPC::wait() {

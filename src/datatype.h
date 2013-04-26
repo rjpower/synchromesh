@@ -1,45 +1,51 @@
 #ifndef SYNC_DATATYPE_H
 #define SYNC_DATATYPE_H
 
-#include "mpirpc.h"
+#include "util.h"
+#include "rpc.h"
 
+// Marshalling implementations for common datatypes:
+//
+// POD (struct, int, float, ...)
+// Fixed size arrays
+// Vectors (resizable)
+// Dictionaries
 namespace synchromesh {
-
-class Data {
-public:
-  virtual int id() const = 0;
-  virtual void send(SendRecvHelper&, int dst) = 0;
-  virtual void recv(SendRecvHelper&, int src) = 0;
-};
-
-typedef Data* (*DataCreator)();
 
 class DataRegistry {
 public:
-  static Data* create(int id);
-  static int register_type(DataCreator);
-  class Helper {
-  private:
-    int id_;
-  public:
-    Helper(DataCreator fn) {
-      id_ = DataRegistry::register_type(fn);
-    }
+  typedef Marshalled* (*CreatorFn)();
 
-    int id() const {
-      return id_;
-    }
-  };
+  static Marshalled* create(int id);
+  static int register_type(CreatorFn);
 };
 
 template<class T>
-class PODData: public Data {
+class RegHelper {
+private:
+  static int id_;
+public:
+  static int id() {
+    return id_;
+  }
+
+  static Marshalled* create() {
+    return new T;
+  }
+};
+
+template<class T>
+int RegHelper<T>::id_ = DataRegistry::register_type(&RegHelper<T>::create);
+
+template<class T>
+class PODData: public Marshalled {
 private:
   T* ptr_;
-
-  static DataRegistry::Helper register_me_;
-
 public:
+  int id() const {
+    return RegHelper<PODData<T> >::id();
+  }
+
   PODData() :
       ptr_(new T) {
   }
@@ -48,33 +54,26 @@ public:
       ptr_(v) {
   }
 
-  static Data* create() {
-    return new PODData<T>();
+  Request* send_internal(RPC* rpc, int dst, int tag) {
+    return rpc->send_data(dst, tag, ptr_, sizeof(T));
   }
 
-  int id() const {
-    return register_me_.id();
-  }
-
-  void send(SendRecvHelper& rpc, int dst) {
-    rpc.send_array(dst, (char*) ptr_, sizeof(T));
-  }
-
-  void recv(SendRecvHelper& rpc, int src) {
-    rpc.recv_array(src, (char*) ptr_, sizeof(T));
+  Request* recv_internal(RPC* rpc, int src, int tag) {
+    return rpc->recv_data(src, tag, ptr_, sizeof(T));
   }
 };
 
 template<class T>
-DataRegistry::Helper PODData<T>::register_me_(&PODData<T>::create);
+static inline Marshalled* pod(T* v) {
+  return new PODData<T>(v);
+}
 
 template<class T>
-class ArrayData: public Data {
+class ArrayData: public Marshalled {
 private:
   T* ptr_;
   size_t num_elems_;
   bool shardable_;
-  static DataRegistry::Helper register_me_;
 public:
   ArrayData() :
       ptr_(NULL), num_elems_(-1), shardable_(false) {
@@ -86,34 +85,77 @@ public:
     ASSERT_GT(num_elems_, 0u);
   }
 
-  static Data* create() {
+  static Marshalled* create() {
     return new ArrayData<T> ;
   }
 
   int id() const {
-    return register_me_.id();
+    return RegHelper<ArrayData<T> >::id();
   }
 
-  void send(SendRecvHelper& rpc) {
-    if (shardable_) {
-      rpc.send_sharded(ptr_, num_elems_);
-    } else {
-      rpc.send_all(ptr_, num_elems_);
-    }
+  Request* send_internal(RPC* rpc, int dst, int tag) {
+    RequestGroup *g = new RequestGroup;
+    g->add(send_pod(rpc, dst, tag, num_elems_));
+    g->add(rpc->send_data(dst, tag, ptr_, sizeof(T) * num_elems_));
+    return g;
   }
 
-  void recv(SendRecvHelper& rpc, int src) {
-    if (shardable_) {
-      ShardCalc calc(num_elems_, sizeof(T), rpc.num_workers());
-      rpc.recv_array(src, (char*) ptr_ + calc.start_byte(src), calc.num_bytes(src));
-    } else {
-      rpc.recv_array(src, (char*) ptr_, num_elems_ * sizeof(T));
-    }
+  Request* recv_internal(RPC* rpc, int src, int tag) {
+    size_t count;
+    Request* r = recv_pod(rpc, src, tag, &count);
+
+    // TODO(rjp) -- use callbacks to do this properly?
+    r->wait();
+
+    ASSERT_EQ(count, num_elems_);
+    return rpc->recv_data(src, tag, ptr_, tag);
   }
 };
 
 template<class T>
-DataRegistry::Helper ArrayData<T>::register_me_(&ArrayData<T>::create);
+static inline Marshalled* array(T* v, size_t len) {
+  return new ArrayData<T>(v, len);
+}
+
+template<class T>
+class VectorData: public Marshalled {
+private:
+  std::vector<T>* data_;
+  bool own_;
+public:
+  VectorData() :
+      data_(new std::vector<T>), own_(true) {
+
+  }
+
+  VectorData(std::vector<T>* d) :
+      data_(d), own_(false) {
+
+  }
+
+  virtual ~VectorData() {
+    delete data_;
+  }
+
+  int id() const {
+    return RegHelper<VectorData<T> >::id();
+  }
+
+  Request* send_internal(RPC* rpc, int dst, int tag) const {
+    RequestGroup *g = new RequestGroup();
+    g->add(send_pod(rpc, dst, tag, data_->size()));
+    g->add(rpc->send_data(dst, tag, data_->data(), data_->size() * sizeof(T)));
+    return g;
+  }
+
+  Request* recv_internal(RPC* rpc, int src, int tag) {
+    size_t len;
+    Request* r = recv_pod(rpc, src, tag, &len);
+    r->wait();
+    data_->resize(len);
+    return rpc->recv_data(src, tag, &data_[0], data_->size());
+  }
+};
 
 } // namespace synchromesh
 #endif /* SYNC_DATATYPE_H */

@@ -67,25 +67,6 @@ public:
   }
 };
 
-
-class SyncServer {
-private:
-  UpdateMap global_;
-  UpdateMap tmp_;
-  boost::thread* thread_;
-  RPC* network_;
-  bool stop_recv_loop_;
-  
-  void recv_update(SendRecvHelper& rpc, int source);
-  void send_state(SendRecvHelper& rpc, int source);
-  void loop();
-
-public:
-  SyncServer(RPC*);
-  void start();
-  void stop();
-};
-
 class Synchromesh {
 private:
   UpdateMap local_;

@@ -2,7 +2,7 @@ $(shell mkdir -p build)
 
 SRC := $(wildcard src/*.cc)
 HEADERS := $(wildcard */*.h) Makefile src/update_gen.h
-INCLUDE := -I. -Isrc -Impi-rpc
+INCLUDE := -I. -Isrc 
 OBJ := $(patsubst src/%.cc,build/%.o,$(SRC))
 
 TEST_SRC := $(wildcard test/*.cc)

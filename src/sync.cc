@@ -61,47 +61,6 @@ void Synchromesh::worker_recv_state(SendRecvHelper& rpc) {
   }
 }
 
-void SyncServer::recv_update(SendRecvHelper& rpc, int src) {
-  LOG("sync <- worker");
-
-  for (auto itr : tmp_) {
-    itr.second->syncer_recv(rpc, source);
-  }
-}
-
-void SyncServer::send_state(SendRecvHelper& rpc, int dst) {
-  LOG("sync -> worker");
-  for (auto itr : global_) {
-    itr.second->syncer_send(rpc, dst);
-  }
-}
-
-void SyncServer::loop() {
-  while (!stop_recv_loop_) {
-    if (!network_->has_data(RPC::kAnyWorker, kUpdateStart)) {
-      sched_yield();
-      continue;
-    }
-
-    SyncOptions opt;
-    network_->recv_pod(RPC::kAnyWorker, kUpdateStart, &opt);
-    if (opt.wait_for_all) {
-      PANIC("Not implemented.");
-    } else {
-      UpdateFunction* fn = UpdateFunctionRegistry::create(opt.update_fn_id);
-      {
-        SendRecvHelper rpc(kWorkerData, *network_);
-        fn->read_values(rpc, opt.worker_id);
-        recv_update(rpc, opt.worker_id);
-      }
-      (*fn)(tmp_, global_);
-      {
-        SendRecvHelper rpc(kSyncerData, *network_);
-        send_state(rpc, opt.worker_id);
-      }
-    }
-  }
-}
 
 void SyncServer::stop() {
   stop_recv_loop_ = true;
