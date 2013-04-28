@@ -1,5 +1,5 @@
 #include "sync.h"
-#include "mpirpc.h"
+#include "rpc.h"
 
 #include <boost/thread.hpp>
 
@@ -62,15 +62,6 @@ void Synchromesh::worker_recv_state(SendRecvHelper& rpc) {
 }
 
 
-void SyncServer::stop() {
-  stop_recv_loop_ = true;
-  thread_->join();
-}
-
-void SyncServer::start() {
-
-}
-
 Data* Synchromesh::register_update(const std::string& name, Data* data) {
   ASSERT_EQ(initialized_, false);
   local_[name] = data;
@@ -80,14 +71,11 @@ Data* Synchromesh::register_update(const std::string& name, Data* data) {
 Synchromesh::Synchromesh(RPC* network) {
   initialized_ = false;
   network_ = network;
-  server_ = new SyncServer(network_);
 }
 
 Synchromesh::~Synchromesh() {
   barrier(network_);
-  server_->stop();
   delete network_;
-
 }
 
 } // namespace synchromesh

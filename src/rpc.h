@@ -10,19 +10,31 @@
 
 #include "fiber.h"
 
+namespace synchromesh {
+
 class RPC;
 
 class ProcessGroup {
+private:
+  std::vector<int> v_;
 public:
-  int first;
-  int last;
-
-  int count() {
-    return last - first + 1;
+  ProcessGroup(int f, int l) {
+    for (int i = f; i <= l; ++i) {
+      v_.push_back(i);
+    }
   }
 
-  ProcessGroup(int f, int l) :
-      first(f), last(l) {
+  int count() const {
+    return v_.size();
+  }
+
+
+  std::vector<int>::const_iterator begin() const {
+    return v_.begin();
+  }
+
+  std::vector<int>::const_iterator end() const {
+    return v_.end();
   }
 };
 
@@ -34,34 +46,25 @@ public:
 
 // Manage a batch of requests.
 class RequestGroup: public Request {
+  std::vector<Request*> reqs_;
 public:
-  void add(Request*);
-  void wait();
-  bool done();
+  void add(Request* req) {
+    reqs_.push_back(req);
+  }
+  void wait() {
+    for (auto m : reqs_) {
+      m->wait();
+    }
+  }
+  bool done() {
+    for (auto m : reqs_) {
+      if (!m->done()) {
+        return false;
+      }
+    }
+    return true;
+  }
 };
-
-class Marshalled {
-protected:
-  virtual Request* send_internal(RPC* rpc, int dst, int tag) const = 0;
-  virtual Request* recv_internal(RPC* rpc, int src, int tag) = 0;
-public:
-  virtual int id() const = 0;
-
-  Request* send(RPC* rpc, int dst, int tag) const;
-  Request* recv(RPC* rpc, int src, int tag);
-};
-
-class CommStrategy {
-private:
-  std::vector<Marshalled>* m_;
-public:
-  void send(RPC* rpc, const ProcessGroup& g);
-  void recv(RPC* rpc, const ProcessGroup& g);
-};
-
-CommStrategy* any(Marshalled*);
-CommStrategy* all(Marshalled*);
-CommStrategy* sharded(Marshalled*);
 
 class ShardCalc {
 private:
@@ -70,7 +73,7 @@ private:
   int elem_size_;
 
 public:
-  ShardCalc(int num_elements, int elem_size, ProcessGroup group);
+  ShardCalc(int num_elements, int elem_size, const ProcessGroup& group);
   size_t start_elem(int worker);
   size_t start_byte(int worker);
 
@@ -91,17 +94,8 @@ public:
   }
 
   virtual Request* send_data(int dst, int tag, const void* ptr, int len) = 0;
-  virtual Request* recv_data(int src, int tag, void* ptr, int len) = 0;
-
-  virtual Request* send(int dst, int tag, const Marshalled& v) {
-    return v.send(this, dst, tag);
-  }
-
-  virtual Request* recv(int src, int tag, Marshalled* v) {
-    return v->recv(this, src, tag);
-  }
-
-  virtual bool has_data(int src, int tag) const = 0;
+  virtual void recv_data(int src, int tag, void* ptr, int len) = 0;
+  virtual bool poll(int src, int tag) const = 0;
 
   // The first, last and current worker ids.
   virtual int first() const = 0;
@@ -114,13 +108,20 @@ public:
 };
 
 template<class T>
-Request* send_pod(RPC* rpc, int dst, int tag, const T& t) {
+static Request* send_pod(RPC* rpc, int dst, int tag, T t) {
   return rpc->send_data(dst, tag, &t, sizeof(t));
 }
 
 template<class T>
-Request* recv_pod(RPC* rpc, int src, int tag, T* t) {
-  return rpc->recv_data(src, tag, t, sizeof(t));
+static void recv_pod(RPC* rpc, int src, int tag, T* t) {
+  rpc->recv_data(src, tag, t, sizeof(t));
+}
+
+template <class T>
+static T recv_pod(RPC* rpc, int src, int tag) {
+  T v;
+  recv_pod(rpc, src, tag, &v);
+  return v;
 }
 
 class MPIRPC: public RPC {
@@ -134,9 +135,9 @@ public:
     MPI::Finalize();
   }
 
-  Request* send_data(int dst, int tag, const char* ptr, int bytes);
-  Request* recv_data(int src, int tag, char* ptr, int bytes);
-  bool has_data(int src, int tag) const;
+  Request* send_data(int dst, int tag, const void* ptr, int bytes);
+  void recv_data(int src, int tag, void* ptr, int bytes);
+  bool poll(int src, int tag) const;
 
   int first() const;
   int last() const;
@@ -179,22 +180,12 @@ public:
   int last() const;
   int id() const;
 
-  Request* recv_data(int src, int tag, char* ptr, int bytes);
-  Request* send_data(int dst, int tag, const char* ptr, int bytes);
+  Request* send_data(int dst, int tag, const void* ptr, int bytes);
+  void recv_data(int src, int tag, void* ptr, int bytes);
 
-  bool has_data(int src, int tag) const;
+  bool poll(int src, int tag) const;
 };
 
-inline Request* Marshalled::send(RPC* rpc, int dst, int tag) const {
-  RequestGroup* g = new RequestGroup;
-  int my_id = id();
-  g->add(rpc->send_data(dst, tag, &my_id, sizeof(int)));
-  g->add(send_internal(rpc, dst, tag));
-  return g;
-}
-
-inline Request* Marshalled::recv(RPC* rpc, int src, int tag) {
-  return recv_internal(rpc, src, tag);
-}
+} // namespace synchromesh
 
 #endif /* MPIRPC_H_ */

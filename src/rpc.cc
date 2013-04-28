@@ -1,5 +1,7 @@
 #include "rpc.h"
 
+namespace synchromesh {
+
 int DummyRPC::num_workers_;
 std::vector<DummyRPC*> DummyRPC::workers_;
 std::vector<boost::thread*> DummyRPC::threads_;
@@ -50,7 +52,7 @@ bool DummyRPC::has_data_internal(int& src, int& tag) const {
   return !data_[src][tag].empty();
 }
 
-size_t DummyRPC::recv_data(int src, int tag, char* ptr, int bytes) {
+void DummyRPC::recv_data(int src, int tag, void* ptr, int bytes) {
   ASSERT_GE(bytes, 0);
   if (src == kAnyWorker || tag == kAnyTag) {
     while (!has_data_internal(src, tag)) {
@@ -69,17 +71,18 @@ size_t DummyRPC::recv_data(int src, int tag, char* ptr, int bytes) {
   }
   ASSERT_EQ((int) p.size(), bytes);
   memcpy(ptr, p.data(), p.size());
-  return p.size();
 }
 
-size_t DummyRPC::send_data(int dst, int tag, const char* ptr, int bytes) {
+Request* DummyRPC::send_data(int dst, int tag, const void* ptr, int bytes) {
   DummyRPC* dst_rpc = workers_[dst];
   {
     boost::recursive_mutex::scoped_lock l(dst_rpc->mut_);
     PacketList& pl = dst_rpc->data_[worker_id_][tag];
-    pl.push_back(Packet(ptr, bytes));
+    pl.push_back(Packet((char *)ptr, bytes));
   }
-  return bytes;
+
+  // TODO(yang) proper request type
+  return NULL;
 }
 
 int DummyRPC::first() const {
@@ -94,7 +97,7 @@ int DummyRPC::id() const {
   return worker_id_;
 }
 
-bool DummyRPC::has_data(int src, int tag) const {
+bool DummyRPC::poll(int src, int tag) const {
   return has_data_internal(src, tag);
 }
 
@@ -102,7 +105,7 @@ void MPIRPC::wait() {
 
 }
 
-size_t MPIRPC::recv_data(int src, int tag, char* ptr, int bytes) {
+void MPIRPC::recv_data(int src, int tag, void* ptr, int bytes) {
 
   ASSERT(src <= last(), "Target not a valid worker index");
   if (src == kAnyWorker) {
@@ -124,10 +127,9 @@ size_t MPIRPC::recv_data(int src, int tag, char* ptr, int bytes) {
 //  LOG("Recv START: %d %d %p %d", src, tag, ptr, bytes);
   world_.Recv(ptr, bytes, MPI::CHAR, src, tag);
   LOG("Recv DONE: %d %d %p %d", src, tag, ptr, bytes);
-  return bytes;
 }
 
-size_t MPIRPC::send_data(int dst, int tag, const char* ptr, int bytes) {
+Request* MPIRPC::send_data(int dst, int tag, const void* ptr, int bytes) {
 //  boost::mutex::scoped_lock lock(mut_);
   ASSERT(dst <= last(), "Target not a valid worker index");
   if (dst == kAnyWorker) {
@@ -153,7 +155,9 @@ size_t MPIRPC::send_data(int dst, int tag, const char* ptr, int bytes) {
 //    }
 //  }
   LOG("Send done to: %d %d %p %d", dst, tag, ptr, bytes);
-  return bytes;
+
+  // TODO(yang) proper request type
+  return NULL;
 }
 
 MPIRPC::MPIRPC() :
@@ -166,7 +170,7 @@ MPIRPC::MPIRPC() :
 //  fiber::init();
 }
 
-bool MPIRPC::has_data(int src, int tag) const {
+bool MPIRPC::poll(int src, int tag) const {
   return world_.Iprobe(src, tag);
 }
 
@@ -182,8 +186,8 @@ int MPIRPC::id() const {
   return world_.Get_rank();
 }
 
-ShardCalc::ShardCalc(int num_elements, int elem_size, int num_workers) :
-    num_workers_(num_workers), num_elements_(num_elements), elem_size_(elem_size) {
+ShardCalc::ShardCalc(int num_elements, int elem_size, const ProcessGroup& g) :
+    num_workers_(g.count()), num_elements_(num_elements), elem_size_(elem_size) {
 }
 
 size_t ShardCalc::start_elem(int worker) {
@@ -219,3 +223,5 @@ size_t ShardCalc::num_bytes(int worker) {
 size_t ShardCalc::num_elems(int worker) {
   return end_elem(worker) - start_elem(worker);
 }
+
+} // namespace synchromesh

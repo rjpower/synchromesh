@@ -8,7 +8,7 @@
 #include <stddef.h>
 #include <boost/noncopyable.hpp>
 
-#include "mpirpc.h"
+#include "rpc.h"
 #include "datatype.h"
 
 namespace synchromesh {
@@ -70,7 +70,6 @@ public:
 class Synchromesh {
 private:
   UpdateMap local_;
-  SyncServer *server_;
   RPC* network_;
   bool initialized_;
 
@@ -86,7 +85,7 @@ public:
 
   template<class T>
   Data* register_array(const std::string& name, T* region, size_t num_elems, bool shardable = true) {
-    return register_update(name, new ArrayData<T>(region, num_elems, shardable));
+    return register_update(name, new Slice<T>(region, num_elems, shardable));
   }
 
   template<class T>
