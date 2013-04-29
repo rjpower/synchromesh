@@ -6,6 +6,8 @@ int DummyRPC::num_workers_;
 std::vector<DummyRPC*> DummyRPC::workers_;
 std::vector<boost::thread*> DummyRPC::threads_;
 
+static const int kMPIBufferBytes = 1 << 28;
+
 // DummyRPC requests always complete immediately.
 class DummyRequest: public Request {
 public:
@@ -13,6 +15,22 @@ public:
     return true;
   }
   void wait() {
+  }
+};
+
+class MPIRequest: public Request {
+private:
+  MPI::Request req_;
+public:
+  MPIRequest(MPI::Request r) :
+      req_(r) {
+  }
+
+  bool done() {
+    return req_.Test();
+  }
+  void wait() {
+    return req_.Wait();
   }
 };
 
@@ -110,10 +128,6 @@ bool DummyRPC::poll(int src, int tag) const {
   return has_data_internal(src, tag);
 }
 
-void MPIRPC::wait() {
-
-}
-
 void MPIRPC::recv_data(int src, int tag, void* ptr, int bytes) {
 
   ASSERT(src <= last(), "Target not a valid worker index");
@@ -124,16 +138,7 @@ void MPIRPC::recv_data(int src, int tag, void* ptr, int bytes) {
     tag = MPI::ANY_TAG;
   }
   LOG("Receiving from: %d %d %p %d", src, tag, ptr, bytes);
-//  while (1) {
-//    sched_yield();
-//    boost::mutex::scoped_lock lock(mut_);
-//    if (world_.Iprobe(src, tag)) {
-//      break;
-//    }
-//  }
-//
-//  boost::mutex::scoped_lock lock(mut_);
-//  LOG("Recv START: %d %d %p %d", src, tag, ptr, bytes);
+
   world_.Recv(ptr, bytes, MPI::CHAR, src, tag);
   LOG("Recv DONE: %d %d %p %d", src, tag, ptr, bytes);
 }
@@ -148,25 +153,10 @@ Request* MPIRPC::send_data(int dst, int tag, const void* ptr, int bytes) {
     tag = MPI::ANY_TAG;
   }
 
-  MPI::Request pending;
-  world_.Send(ptr, bytes, MPI::CHAR, dst, tag);
-//  {
-//    boost::mutex::scoped_lock lock(mut_);
-//    LOG("Sending to: %d %d %p %d", dst, tag, ptr, bytes);
-//    pending = world_.Isend(ptr, bytes, MPI::CHAR, dst, tag);
-//  }
-//
-//  while (1) {
-//    sched_yield();
-//    boost::mutex::scoped_lock lock(mut_);
-//    if (pending.Test()) {
-//      break;
-//    }
-//  }
+  MPI::Request req = world_.Ibsend(ptr, bytes, MPI::CHAR, dst, tag);
   LOG("Send done to: %d %d %p %d", dst, tag, ptr, bytes);
 
-  // TODO(yang) proper request type
-  return NULL;
+  return new MPIRequest(req);
 }
 
 MPIRPC::MPIRPC() :
@@ -175,6 +165,9 @@ MPIRPC::MPIRPC() :
   MPI_Initialized(&is_initialized);
   if (!is_initialized) {
     MPI::Init_thread(MPI::THREAD_SERIALIZED);
+
+    void* mpi_buffer = malloc(kMPIBufferBytes);
+    MPI::Attach_buffer(mpi_buffer, kMPIBufferBytes);
   }
 //  fiber::init();
 }

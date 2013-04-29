@@ -151,8 +151,6 @@ public:
   int first() const;
   int last() const;
   int id() const;
-
-  void wait();
 };
 
 // Pretend to run MPI using a bunch of threads.
