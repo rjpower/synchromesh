@@ -1,17 +1,27 @@
 #include "datatype.h"
 
+using std::vector;
+using std::map;
+
 namespace synchromesh {
 
 int DataRegistry::creator_counter_ = 1000;
-std::map<int, DataRegistry::CreatorFn> DataRegistry::creators_;
+DataRegistry::Map* DataRegistry::creators_ = NULL;
 
 int DataRegistry::register_type(CreatorFn fn) {
+  if (creators_ == NULL) {
+    creators_ = new DataRegistry::Map();
+  }
   int id = creator_counter_++;
-  creators_.insert(std::make_pair(id, fn));
+  creators_->insert(std::make_pair(id, fn));
   return id;
 }
 
-class AllStrategy : public CommStrategy {
+class AllStrategy: public CommStrategy {
+public:
+  AllStrategy(Marshalled* m) :
+      CommStrategy(m) {
+  }
   virtual Request* send(RPC* rpc, const ProcessGroup& g, int tag) {
     RequestGroup *rg = new RequestGroup();
     for (auto proc : g) {
@@ -27,7 +37,11 @@ class AllStrategy : public CommStrategy {
   }
 };
 
-class AnyStrategy : public CommStrategy {
+class AnyStrategy: public CommStrategy {
+public:
+  AnyStrategy(Marshalled* m) :
+      CommStrategy(m) {
+  }
   virtual Request* send(RPC* rpc, const ProcessGroup& g, int tag) {
     PANIC("Not implemented.  Who do you want to send to?");
     return NULL;
@@ -37,37 +51,70 @@ class AnyStrategy : public CommStrategy {
     while (true) {
       for (auto proc : g) {
         if (rpc->poll(proc, tag)) {
-         m_->recv(rpc, proc, tag);
-         return;
+          m_->recv(rpc, proc, tag);
+          return;
         }
       }
     }
   }
 };
 
-class OneStrategy : public CommStrategy {
-  virtual Request* send(RPC* rpc, int dest, int tag) {
-    return this->m_->send(rpc, dest, tag);
+class OneStrategy: public CommStrategy {
+private:
+  int dst_;
+public:
+  OneStrategy(Marshalled* m, int dst) :
+      CommStrategy(m), dst_(dst) {
+  }
+  virtual Request* send(RPC* rpc, const ProcessGroup& g, int tag) {
+    return this->m_->send(rpc, dst_, tag);
   }
 
-  virtual void recv(RPC* rpc, int src, int tag) {
-    this->m_->recv(rpc, src, tag);
+  virtual void recv(RPC* rpc, const ProcessGroup& g, int tag) {
+    this->m_->recv(rpc, dst_, tag);
   }
 };
 
+// The 'sharded' comm strategy doesn't actually require the top level object
+// to be marshallable.
+class ShardedStrategy: public CommStrategy {
+public:
+  ShardedStrategy(Shardable* m) :
+      CommStrategy(reinterpret_cast<Marshalled*>(m)) {
+  }
 
-class ShardedStrategy : public CommStrategy {
   virtual Request* send(RPC* rpc, const ProcessGroup& g, int tag) {
+    vector<Marshalled::Ptr> slices = reinterpret_cast<Shardable*>(m_)->slice(g.count());
     RequestGroup *rg = new RequestGroup();
-    for (auto proc : g) {
-      rg->add(m_->send(rpc, proc, tag));
+    for (int i = 0; i < g.count(); ++i) {
+      rg->add(slices[i]->send(rpc, (*g.begin() + i), tag));
     }
+
     return rg;
   }
 
   virtual void recv(RPC* rpc, const ProcessGroup& g, int tag) {
-    // FIXME how can I get shard information
+    vector<Marshalled::Ptr> slices = reinterpret_cast<Shardable*>(m_)->slice(g.count());
+    for (int i = 0; i < g.count(); ++i) {
+      slices[i]->recv(rpc, (*g.begin() + i), tag);
+    }
   }
 };
+
+CommStrategy::Ptr all(Marshalled* m) {
+  return CommStrategy::Ptr(new AllStrategy(m));
+}
+
+CommStrategy::Ptr any(Marshalled* m) {
+  return CommStrategy::Ptr(new AnyStrategy(m));
+}
+
+CommStrategy::Ptr one(Marshalled* m, int tgt) {
+  return CommStrategy::Ptr(new OneStrategy(m, tgt));
+}
+
+CommStrategy::Ptr sharded(Shardable* m) {
+  return CommStrategy::Ptr(new ShardedStrategy(m));
+}
 
 } // namespace synchromesh

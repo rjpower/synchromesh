@@ -28,7 +28,6 @@ public:
     return v_.size();
   }
 
-
   std::vector<int>::const_iterator begin() const {
     return v_.begin();
   }
@@ -40,22 +39,32 @@ public:
 
 class Request {
 public:
+  virtual ~Request() {
+
+  }
+  typedef boost::shared_ptr<Request> Ptr;
   virtual bool done() = 0;
   virtual void wait() = 0;
 };
 
 // Manage a batch of requests.
 class RequestGroup: public Request {
-  std::vector<Request*> reqs_;
+  std::vector<Request::Ptr> reqs_;
 public:
   void add(Request* req) {
+    add(Request::Ptr(req));
+  }
+
+  void add(Request::Ptr req) {
     reqs_.push_back(req);
   }
+
   void wait() {
     for (auto m : reqs_) {
       m->wait();
     }
   }
+
   bool done() {
     for (auto m : reqs_) {
       if (!m->done()) {
@@ -117,7 +126,7 @@ static void recv_pod(RPC* rpc, int src, int tag, T* t) {
   rpc->recv_data(src, tag, t, sizeof(t));
 }
 
-template <class T>
+template<class T>
 static T recv_pod(RPC* rpc, int src, int tag) {
   T v;
   recv_pod(rpc, src, tag, &v);

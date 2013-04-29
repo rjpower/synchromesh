@@ -6,6 +6,16 @@ int DummyRPC::num_workers_;
 std::vector<DummyRPC*> DummyRPC::workers_;
 std::vector<boost::thread*> DummyRPC::threads_;
 
+// DummyRPC requests always complete immediately.
+class DummyRequest: public Request {
+public:
+  bool done() {
+    return true;
+  }
+  void wait() {
+  }
+};
+
 void DummyRPC::run(int num_workers, boost::function<void(DummyRPC*)> run_f) {
 //  pth_init();
   num_workers_ = num_workers;
@@ -78,11 +88,10 @@ Request* DummyRPC::send_data(int dst, int tag, const void* ptr, int bytes) {
   {
     boost::recursive_mutex::scoped_lock l(dst_rpc->mut_);
     PacketList& pl = dst_rpc->data_[worker_id_][tag];
-    pl.push_back(Packet((char *)ptr, bytes));
+    pl.push_back(Packet((char *) ptr, bytes));
   }
 
-  // TODO(yang) proper request type
-  return NULL;
+  return new DummyRequest();
 }
 
 int DummyRPC::first() const {

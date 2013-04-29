@@ -2,6 +2,8 @@
 #define SYNC_DATATYPE_H
 
 #include <map>
+#include <vector>
+#include <boost/shared_ptr.hpp>
 
 #include "util.h"
 #include "rpc.h"
@@ -16,6 +18,7 @@ namespace synchromesh {
 
 class Marshalled {
 public:
+  typedef boost::shared_ptr<Marshalled> Ptr;
   virtual ~Marshalled() {
   }
   virtual int id() const = 0;
@@ -24,16 +27,35 @@ public:
   virtual void recv(RPC* rpc, int src, int tag) = 0;
 };
 
+class Shardable {
+public:
+  virtual ~Shardable() {
+
+  }
+
+  // Return a list of 'total' slices for this object.
+  virtual std::vector<Marshalled::Ptr> slice(int total) {
+    std::vector<Marshalled::Ptr> m;
+    for (int i = 0; i < total; ++i) {
+      m.push_back(Marshalled::Ptr(slice(total, i)));
+    }
+    return m;
+  }
+
+  virtual Marshalled* slice(int total, int id) = 0;
+};
+
 class DataRegistry {
 public:
   typedef Marshalled* (*CreatorFn)();
   static inline Marshalled* create(int id) {
-    return creators_[id]();
+    return (*creators_)[id]();
   }
   static int register_type(CreatorFn);
 private:
+  typedef std::map<int, DataRegistry::CreatorFn> Map;
   static int creator_counter_;
-  static std::map<int, CreatorFn> creators_;
+  static Map* creators_;
 };
 
 static inline Request* send(RPC* rpc, int dst, int tag, const Marshalled& v) {
@@ -54,19 +76,15 @@ static inline Marshalled* recv(RPC* rpc, int src, int tag) {
   return m;
 }
 
-class Shardable {
-public:
-  virtual ~Shardable() {
-  }
-  virtual void* data() = 0;
-  virtual size_t element_size() = 0;
-  virtual size_t len() = 0;
-};
-
 class CommStrategy {
 protected:
   Marshalled* m_;
 public:
+  typedef boost::shared_ptr<CommStrategy> Ptr;
+  CommStrategy(Marshalled* m) :
+      m_(m) {
+  }
+
   virtual ~CommStrategy() {
   }
 
@@ -82,10 +100,10 @@ public:
   virtual void recv(RPC* rpc, const ProcessGroup& g, int tag) = 0;
 };
 
-CommStrategy* any(Marshalled*);
-CommStrategy* all(Marshalled*);
-CommStrategy* sharded(Shardable*);
-CommStrategy* one(Marshalled*, int tgt);
+CommStrategy::Ptr any(Marshalled*);
+CommStrategy::Ptr all(Marshalled*);
+CommStrategy::Ptr sharded(Shardable*);
+CommStrategy::Ptr one(Marshalled*, int tgt);
 
 template<class T>
 class RegHelper {
@@ -121,7 +139,7 @@ public:
       ptr_(v) {
   }
 
-  Request* send(RPC* rpc, int dst, int tag) {
+  Request* send(RPC* rpc, int dst, int tag) const {
     return rpc->send_data(dst, tag, ptr_, sizeof(T));
   }
 
@@ -160,7 +178,7 @@ public:
     return RegHelper<Slice<T> >::id();
   }
 
-  Request* send(RPC* rpc, int dst, int tag) {
+  Request* send(RPC* rpc, int dst, int tag) const {
     RequestGroup *g = new RequestGroup;
     g->add(send_pod(rpc, dst, tag, num_elems_));
     g->add(rpc->send_data(dst, tag, ptr_, sizeof(T) * num_elems_));
@@ -215,7 +233,7 @@ public:
   }
 };
 
-class SeqMarshalled : public Marshalled {
+class SeqMarshalled: public Marshalled {
 private:
   std::vector<Marshalled*> data_;
 public:

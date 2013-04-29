@@ -1,4 +1,5 @@
-#include "sync.h"
+#include "rpc.h"
+#include "datatype.h"
 
 using namespace synchromesh;
 
@@ -8,40 +9,24 @@ struct ABC {
   int c;
 };
 
-void SimpleUpdate(UpdateMap& tmp, UpdateMap& global) {
-  LOG("Update function running...");
-  float* f = tmp["test_1"]->as_array<float>();
-  for (int i = 0; i < 10; ++i) {
-    ASSERT_EQ(f[i], i);
-  }
-  const ABC& abc = tmp["test_2"]->as<ABC>();
-  ASSERT_EQ(abc.a, 1);
-  ASSERT_EQ(abc.b, 3);
-  ASSERT_EQ(abc.c, 5);
-}
-
-void SimpleUpdate2(const int& a, UpdateMap& tmp, UpdateMap& global) {
-  SimpleUpdate(tmp, global);
-  ASSERT_EQ(a, 100);
-}
-
 void runner(RPC* rpc) {
   LOG("Running on worker: %d", rpc->id());
-  Synchromesh m(rpc);
-  float a[10] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9 };
-  ABC abc = { 1, 3, 5 };
-  m.register_array("test_1", a, 10, false /* not sharded */);
-  m.register_pod("test_2", &abc);
+  ABC local;
+  ProcessGroup g(rpc->first(), rpc->last());
+  Request* req = NULL;
+  if (rpc->id() == 0) {
+    CommStrategy::Ptr c = all(pod(&local));
+    req = c->send(rpc, g, 100);
+  }
 
-  m.init<NoOp>();
-  m.update<SimpleUpdate>();
-  m.update<int, SimpleUpdate2>(100);
+  CommStrategy::Ptr c = one(pod(&local), 0);
+  c->recv(rpc, g, 100);
+  if (req) {
+    req->wait();
+    delete req;
+  }
 }
 
 int main(int argc, char** argv) {
-  if (MPI::Init_thread(argc, argv, MPI_THREAD_MULTIPLE) == MPI_SUCCESS) {
-    runner(new MPIRPC);
-  } else {
-    DummyRPC::run(8, &runner);
-  }
+  DummyRPC::run(8, &runner);
 }
