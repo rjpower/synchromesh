@@ -81,7 +81,7 @@ bool DummyRPC::has_data_internal(int& src, int& tag) const {
 }
 
 void DummyRPC::recv_data(int src, int tag, void* ptr, int bytes) {
-  LOG("Receiving... %d %d %d", src, tag, bytes);
+  Log_Debug("Receiving... %d %d %d", src, tag, bytes);
   ASSERT_GE(bytes, 0);
   if (src == kAnyWorker || tag == kAnyTag) {
     while (!has_data_internal(src, tag)) {
@@ -103,7 +103,7 @@ void DummyRPC::recv_data(int src, int tag, void* ptr, int bytes) {
 }
 
 Request* DummyRPC::send_data(int dst, int tag, const void* ptr, int bytes) {
-  LOG("Sending... %d %d %d", dst, tag, bytes);
+  Log_Debug("Sending... %d %d %d", dst, tag, bytes);
   DummyRPC* dst_rpc = workers_[dst];
   {
     boost::recursive_mutex::scoped_lock l(dst_rpc->mut_);
@@ -139,10 +139,10 @@ void MPIRPC::recv_data(int src, int tag, void* ptr, int bytes) {
   if (tag == kAnyTag) {
     tag = MPI::ANY_TAG;
   }
-  LOG("Receiving from: %d %d %p %d", src, tag, ptr, bytes);
+  Log_Debug("Receiving from: %d %d %p %d", src, tag, ptr, bytes);
 
   world_.Recv(ptr, bytes, MPI::CHAR, src, tag);
-  LOG("Recv DONE: %d %d %p %d", src, tag, ptr, bytes);
+  Log_Debug("Recv DONE: %d %d %p %d", src, tag, ptr, bytes);
 }
 
 Request* MPIRPC::send_data(int dst, int tag, const void* ptr, int bytes) {
@@ -156,7 +156,7 @@ Request* MPIRPC::send_data(int dst, int tag, const void* ptr, int bytes) {
   }
 
   MPI::Request req = world_.Ibsend(ptr, bytes, MPI::CHAR, dst, tag);
-  LOG("Send done to: %d %d %p %d", dst, tag, ptr, bytes);
+  Log_Debug("Send done to: %d %d %p %d", dst, tag, ptr, bytes);
 
   return new MPIRequest(req);
 }

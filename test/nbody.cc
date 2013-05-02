@@ -8,7 +8,7 @@
 using namespace synchromesh;
 
 void runner(RPC* rpc) {
-  LOG("Running on worker: %d", rpc->id());
+  Log_Info("Running on worker: %d", rpc->id());
   Endpoint ep(1, rpc->last(), 1987); // 1987 as tag
 
   //

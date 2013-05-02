@@ -46,6 +46,16 @@ public:
   }
 };
 
+class ArrayLike {
+public:
+  virtual const void* data_ptr() const = 0;
+  virtual void* data_ptr() = 0;
+
+  virtual void resize(size_t) = 0;
+  virtual size_t element_size() const = 0;
+  virtual size_t count() const= 0;
+};
+
 class ShardCalc {
 private:
   int num_workers_;
@@ -71,26 +81,38 @@ protected:
   Endpoint ep_;
   RPC* rpc_;
 public:
-  Comm(RPC* rpc, const Endpoint& ep) : ep_(ep), rpc_(rpc) {}
+  Comm(RPC* rpc, const Endpoint& ep) :
+      ep_(ep), rpc_(rpc) {
+  }
   virtual Request* send_pod(const void* v, size_t len) = 0;
-  virtual Request* send_array(const void* v, size_t nelems, size_t elem_size) {
-    return send_pod(v, nelems * elem_size);
+  virtual Request* send_array(const ArrayLike& v) {
+    RequestGroup* rg = new RequestGroup;
+    size_t count = v.count();
+    rg->add(send_pod(&count, sizeof(count)));
+    rg->add(send_pod(v.data_ptr(), v.element_size() * v.count()));
+    return rg;
   }
 
   virtual void recv_pod(void* v, size_t len) = 0;
-  virtual void recv_array(void* v, size_t nelems, size_t elem_size) {
-    return recv_pod(v, nelems * elem_size);
+  virtual void recv_array(ArrayLike& v) {
+    size_t count;
+    recv_pod(&count, sizeof(count));
+    v.resize(count);
+    return recv_pod(v.data_ptr(), v.element_size() * v.count());
   }
 };
 
-
 class AllComm: public Comm {
 public:
-  AllComm(RPC* rpc, const Endpoint& ep) : Comm(rpc, ep) {}
+  AllComm(RPC* rpc, const Endpoint& ep) :
+      Comm(rpc, ep) {
+  }
 
   virtual Request* send_pod(const void* v, size_t len) {
     RequestGroup *rg = new RequestGroup();
-    for (auto d : ep_) { rg->add(rpc_->send_data(d, ep_.tag(), v, len)); }
+    for (auto d : ep_) {
+      rg->add(rpc_->send_data(d, ep_.tag(), v, len));
+    }
     return rg;
   }
 
@@ -105,7 +127,9 @@ class AnyComm: public Comm {
 private:
   int tgt_;
 public:
-  AnyComm(RPC* rpc, const Endpoint& ep) : Comm(rpc, ep) {}
+  AnyComm(RPC* rpc, const Endpoint& ep) :
+      Comm(rpc, ep), tgt_(-1) {
+  }
   virtual Request* send_pod(const void* v, size_t len) {
     PANIC("Not implemented.  Who do you want to send to?");
     return NULL;
@@ -128,7 +152,9 @@ class OneComm: public Comm {
 private:
   int dst_;
 public:
-  OneComm(RPC* rpc, const Endpoint& ep, int dst) : Comm(rpc, ep), dst_(dst) {}
+  OneComm(RPC* rpc, const Endpoint& ep, int dst) :
+      Comm(rpc, ep), dst_(dst) {
+  }
   virtual Request* send_pod(const void* v, size_t len) {
     return rpc_->send_data(dst_, ep_.tag(), v, len);
   }
@@ -142,7 +168,9 @@ public:
 // to be marshallable.
 class ShardedComm: public Comm {
 public:
-  ShardedComm(RPC* rpc, const Endpoint& ep) : Comm(rpc, ep) {}
+  ShardedComm(RPC* rpc, const Endpoint& ep) :
+      Comm(rpc, ep) {
+  }
   virtual Request* send_pod(const void* v, size_t len) {
     RequestGroup *rg = new RequestGroup();
     for (auto d : ep_) {
@@ -151,69 +179,49 @@ public:
     return rg;
   }
 
-  virtual void recv_pod(void* v, size_t len) {
-    PANIC("Not implemented.");
-    // rpc_->recv_data(dst_, ep_.tag(), v, len);
-  }
+  virtual void recv_pod(void* v, size_t len);
 
-  virtual Request* send_array(const void* v, size_t nelems, size_t elem_size) {
-    RequestGroup* rg = new RequestGroup;
-    ShardCalc sc(nelems, elem_size, ep_.count());
-    const char* cv = (char*)v;
-    for (int i = 0; i < ep_.count(); ++i) {
-      int dst = *(ep_.begin() + i);
-      rg->add(rpc_->send_data(dst, ep_.tag(), cv + sc.start_byte(i), sc.num_elems(i)));
-    }
-    return rg;
-  }
-
-  virtual void recv_array(void* v, size_t nelems, size_t elem_size) {
-    ShardCalc sc(nelems, elem_size, ep_.count());
-    char* cv = (char*)v;
-    for (int i = 0; i < ep_.count(); ++i) {
-      int src = *(ep_.begin() + i);
-      rpc_->recv_data(src, ep_.tag(), cv + sc.start_byte(i), sc.num_elems(i));
-    }
-  }
+  virtual Request* send_array(const ArrayLike& v);
+  virtual void recv_array(ArrayLike& v);
 };
 
-template <class T>
-T recv(Comm* comm) {
+template<class T>
+T recv(Comm& comm) {
   T v;
   recv(comm, v);
   return v;
 }
 
-template <class T>
-void send(Comm* comm, const T& v,
-          typename boost::enable_if<boost::is_pod<T> >::type* = 0) {
-  comm->send_pod(&v, sizeof(v));
+template<class T>
+Request* send(Comm& comm, const T& v, typename boost::enable_if<boost::is_pod<T> >::type* = 0) {
+  return comm.send_pod(&v, sizeof(v));
 }
 
-template <class T>
-void recv(Comm* comm, T& v,
-          typename boost::enable_if<boost::is_pod<T> >::type* = 0) {
-  comm->recv_pod(&v, sizeof(v));
+template<class T>
+void recv(Comm& comm, T& v, typename boost::enable_if<boost::is_pod<T> >::type* = 0) {
+  comm.recv_pod(&v, sizeof(v));
 }
 
-template <class V>
-void send(Comm* comm, const std::vector<V>& v) {
-  send(comm, v.size());
+template<class V>
+Request* send(Comm& comm, const std::vector<V>& v) {
+  RequestGroup* rg = new RequestGroup;
+  rg->add(send(comm, v.size()));
   if (boost::is_pod<V>::value) {
-    comm->send_pod(v.data(), v.size() * sizeof(V));
+    rg->add(comm.send_pod(v.data(), v.size() * sizeof(V)));
   } else {
     for (auto i : v) {
-      send(comm, i);
+      rg->add(send(comm, i));
     }
   }
+  return rg;
 }
 
-template <class V>
-void recv(Comm* comm, std::vector<V>& v) {
+template<class V>
+void recv(Comm& comm, std::vector<V>& v) {
   size_t sz = recv<size_t>(comm);
   v.resize(sz);
   if (boost::is_pod<V>::value) {
-    comm->recv_pod(&v[0], v.size() * sizeof(V));
+    comm.recv_pod(&v[0], v.size() * sizeof(V));
   } else {
     for (auto i : v) {
       recv(comm, i);
@@ -222,41 +230,70 @@ void recv(Comm* comm, std::vector<V>& v) {
 }
 
 // Like a vector, but should be sharded.
-// TODO - different behavior for shardcomm vs others?
-template <class V>
-class Sharded : public std::vector<V> {
+template<class V>
+class Sharded: public ArrayLike {
+private:
+  std::vector<V> m_;
+public:
+  void* data_ptr() {
+    return (void*) m_.data();
+  }
+
+  const void* data_ptr() const {
+    return (void*) m_.data();
+  }
+
+  const V& operator[](size_t idx) const {
+    return m_[idx];
+  }
+
+  V& operator[](size_t idx) {
+    return m_[idx];
+  }
+
+  void resize(size_t sz) {
+    m_.resize(sz);
+  }
+
+  size_t count() const {
+    return m_.size();
+  }
+
+  size_t size() const {
+    return m_.size();
+  }
+
+  size_t element_size() const {
+    return sizeof(V);
+  }
 };
 
-template <class V>
-void send(Comm* comm, const Sharded<V>& v) {
+template<class V>
+Request* send(Comm& comm, const Sharded<V>& v) {
   if (!boost::is_pod<V>::value) {
     PANIC("Sharding non-pod types not supported.");
   }
-  send(comm, v.size());
-  comm->send_array(v.data(), v.size(), sizeof(V));
+  return comm.send_array(v);
 }
 
-template <class V>
-void recv(Comm* comm, Sharded<V>& v) {
-  size_t sz = recv<size_t>(comm);
-  v.resize(sz);
-  if (!boost::is_pod<V>::value) {
-    PANIC("Sharding non-pod types not supported.");
-  }
-  comm->recv_array(v.data(), v.size(), sizeof(V));
+template<class V>
+void recv(Comm& comm, Sharded<V>& v) {
+  return comm.recv_array(v);
 }
 
-template <class K, class V>
-void send(Comm* comm, const std::map<K, V>& v) {
-  send(comm, v.size());
+template<class K, class V>
+Request* send(Comm& comm, const std::map<K, V>& v) {
+  RequestGroup* rg = new RequestGroup;
+  rg->add(send(comm, v.size()));
   for (auto i : v) {
-    send(comm, i.first);
-    send(comm, i.second);
+    rg->add(send(comm, i.first));
+    rg->add(send(comm, i.second));
   }
+  return rg;
 }
 
-template <class K, class V>
-void recv(Comm* comm, std::map<K, V>& m) {
+template<class K, class V>
+void recv(Comm& comm, std::map<K, V>& m) {
   size_t sz = recv<size_t>(comm);
   for (size_t i = 0; i < sz; ++i) {
     K k;
@@ -264,7 +301,6 @@ void recv(Comm* comm, std::map<K, V>& m) {
     recv(comm, m[k]);
   }
 }
-
 
 } // namespace synchromesh
 #endif /* SYNC_DATATYPE_H */

@@ -11,8 +11,15 @@ struct ABC {
   int c;
 };
 
-void test_1(RPC* rpc) {
-  Endpoint ep(1, rpc->last(), 100);
+static const int kDefaultTag = 1;
+
+#define RUN_TEST(expr)\
+  Log_Info("Running %s", #expr);\
+  DummyRPC::run(8, &expr);;\
+  Log_Info("Done.");
+
+void test_sharded_map_to_one(RPC* rpc) {
+  Endpoint ep(1, rpc->last(), kDefaultTag);
   if (rpc->id() == 0) {
     map<int, int> m;
     for (int i = 0; i < 100; ++i) {
@@ -20,60 +27,87 @@ void test_1(RPC* rpc) {
     }
 
     ShardedComm sc(rpc, ep);
-    send(&sc, m);
+    send(sc, m)->wait();
   } else {
     map<int, int> m;
     OneComm one(rpc, ep, 0);
     ASSERT_EQ(m.size(), 0);
-    recv(&one, m);
+    recv(one, m);
     ASSERT_EQ(m[78], 78);
   }
 }
 
-void test_2(RPC* rpc) {
-  Endpoint ep(1, rpc->last(), 100);
+void test_all_to_one(RPC* rpc) {
+  Endpoint ep(1, rpc->last(), kDefaultTag);
   if (rpc->id() == 0) {
     map<int, int> m;
     for (int i = 0; i < 100; ++i) {
       m[i] = i;
     }
     AllComm all(rpc, ep);
-    send(&all, m);
+    send(all, m)->wait();
   } else {
     map<int, int> m;
     OneComm one(rpc, ep, 0);
     ASSERT_EQ(m.size(), 0);
-    recv(&one, m);
+    recv(one, m);
     ASSERT_EQ(m[78], 78);
   }
 }
 
-void test_3(RPC* rpc) {
-  Endpoint ep(1, rpc->last(), 100);
+void test_sharded_send(RPC* rpc) {
+  Endpoint ep(rpc->first(), rpc->last(), kDefaultTag);
   if (rpc->id() == 0) {
     Sharded<int> m;
-    m.resize(1000);
-    for (int i = 0; i < 1000; ++i) {
+    m.resize(100);
+    for (int i = 0; i < 100; ++i) {
       m[i] = i;
     }
     ShardedComm sc(rpc, ep);
-    send(&sc, m);
+    send(sc, m)->wait();
   } else {
     Sharded<int> m;
     OneComm one(rpc, ep, 0);
-    ASSERT_EQ(m.size(), 0);
-    recv(&one, m);
-    LOG("Size of shard: %d", m.size());
-  }
+    recv(one, m);
 
+    ShardCalc sc(100, sizeof(int), ep.count());
+    Log_Info("Size of shard: %zd", m.size());
+    ASSERT_EQ(sc.num_elems(rpc->id()), m.size());
+    for (size_t i = 0; i < m.size(); ++i) {
+      ASSERT_EQ(m[i], sc.start_elem(rpc->id()) + i);
+    }
+  }
 }
-void runner(RPC* rpc) {
-  LOG("Running on worker: %d", rpc->id());
-  test_1(rpc);
-  test_2(rpc);
-  test_3(rpc);
+
+void test_sharded_recv(RPC* rpc) {
+  Endpoint ep(1, rpc->last(), kDefaultTag);
+  ShardCalc sc(100, sizeof(int), ep.count());
+
+  if (rpc->id() == 0) {
+    Sharded<int> m;
+    ShardedComm c(rpc, ep);
+    recv(c, m);
+    ASSERT_EQ(m.size(), 100);
+    for (int i = 0; i < 100; ++i) {
+      ASSERT_EQ(m[i], i);
+    }
+  } else {
+    Sharded<int> m;
+    m.resize(sc.num_elems(rpc->id() - 1));
+    for (size_t i = 0; i < m.size(); ++i) {
+      m[i] = sc.start_elem(rpc->id() - 1) + i;
+    }
+
+    Log_Info("%d sending %d items", rpc->id(), m.size());
+
+    OneComm one(rpc, ep, 0);
+    send(one, m)->wait();
+  }
 }
 
 int main(int argc, char** argv) {
-  DummyRPC::run(8, &runner);
+  RUN_TEST(test_sharded_map_to_one);
+  RUN_TEST(test_all_to_one);
+  RUN_TEST(test_sharded_send)
+  RUN_TEST(test_sharded_recv);
 }
