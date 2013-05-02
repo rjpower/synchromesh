@@ -155,7 +155,7 @@ public:
     PANIC("Not implemented.");
     // rpc_->recv_data(dst_, ep_.tag(), v, len);
   }
-  
+
   virtual Request* send_array(const void* v, size_t nelems, size_t elem_size) {
     RequestGroup* rg = new RequestGroup;
     ShardCalc sc(nelems, elem_size, ep_.count());
@@ -202,8 +202,8 @@ void send(Comm* comm, const std::vector<V>& v) {
   if (boost::is_pod<V>::value) {
     comm->send_pod(v.data(), v.size() * sizeof(V));
   } else {
-    for (auto i : v) { 
-      send(comm, i); 
+    for (auto i : v) {
+      send(comm, i);
     }
   }
 }
@@ -215,8 +215,8 @@ void recv(Comm* comm, std::vector<V>& v) {
   if (boost::is_pod<V>::value) {
     comm->recv_pod(&v[0], v.size() * sizeof(V));
   } else {
-    for (auto i : v) { 
-      recv(comm, i); 
+    for (auto i : v) {
+      recv(comm, i);
     }
   }
 }
