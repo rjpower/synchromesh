@@ -39,14 +39,15 @@ extern LogLevel log_level;
         abort();\
     }
 
+
 // I don't like assuming everything is of integer type.  Unfortunately
 // "auto" and "decltype" are mutually exclusive, so I can't use this in
 // C++-11 and older code.  Fix at some point when I determine the proper
 // macros/boost library to magic this away.
 #define ASSERT_COND(a, b, cond)\
     {\
-    long at = (long)a;\
-    long bt = (long)b;\
+    auto at = a;\
+    auto bt = b;\
     if (!(at cond bt)) {\
       DO_LOG("Assertion %s %s %s failed. %s = %ld, %s = %ld", #a, #cond, #b, #a, (long)at, #b, (long)bt);\
       abort();\

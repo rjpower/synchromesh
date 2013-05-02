@@ -33,6 +33,10 @@ static inline Point operator*(const Point& a, double scale) {
   return p;
 }
 
+static const int N = 1000;
+static Point* pts;
+static Point* forces;
+
 void runner(RPC* rpc) {
   Log_Info("Running on worker: %d", rpc->id());
   Endpoint ep(rpc->first(), rpc->last(), 1987); // 1987 as tag
@@ -41,13 +45,8 @@ void runner(RPC* rpc) {
   // PHASE 1: GENERATE AND SEND INITIAL LOCATION DATA
   //
 
-  const int N = 1000;
-  Point* pts = new Point[N];
-  Point* forces = new Point[N];
-
   if (rpc->id() == 0) {
     // node 0: gen & send data
-    srand(getpid());
     for (int i = 0; i < N; i++) {
       pts[i].x = rand() / double(RAND_MAX) * 2.0 - 1.0;
       pts[i].y = rand() / double(RAND_MAX) * 2.0 - 1.0;
@@ -99,17 +98,30 @@ void runner(RPC* rpc) {
 
     req->wait();
   }
-
-  delete[] pts;
 }
 
 int main(int argc, char** argv) {
-  srand(getpid());
+  pts = new Point[N];
+  forces = new Point[N];
 
-//  if (MPI::Init_thread(argc, argv, MPI_THREAD_MULTIPLE) == MPI_SUCCESS) {
-//    runner(new MPIRPC);
-//  } else {
-    DummyRPC::run(8, &runner);
-//  }
+  // Run with 1 worker to get a reference.
+  Log_Info("Running with 1 worker.");
+  srand(getpid());
+  DummyRPC::run(1, &runner);
+  static Point* reference = new Point[N];
+  memcpy(reference, pts, sizeof(Point) * N);
+
+  Log_Info("done.");
+
+  for (int num_workers = 2; num_workers < 16; num_workers *= 2) {
+    srand(getpid());
+    DummyRPC::run(num_workers, &runner);
+    for (size_t i = 0; i < N; ++i) {
+      ASSERT_EQ(pts[i].x, reference[i].x);
+      ASSERT_EQ(pts[i].y, reference[i].y);
+      ASSERT_EQ(pts[i].z, reference[i].z);
+    }
+    ASSERT_EQ(memcmp(reference, pts, sizeof(Point) * N), 0);
+  }
 }
 
