@@ -64,23 +64,24 @@ Request* ShardedComm::send_array(const ArrayLike& v) {
 }
 
 void ShardedComm::recv_array(ArrayLike& v) {
+  size_t pos = 0;
   for (int i = 0; i < ep_.count(); ++i) {
     int src = *(ep_.begin() + i);
 
-    Log_Info("Reading... %d %d %d", i, src, rpc_->id());
+    Log_Debug("Reading... %d %d %d", i, src, rpc_->id());
     // skip self.
     if (src == rpc_->id()) {
       continue;
     }
 
-    size_t old = v.count();
     size_t sz;
     rpc_->recv_data(src, ep_.tag(), &sz, sizeof(size_t));
-    v.resize(old + sz);
-    Log_Info("Reading %d entries from %d (%d); %d -> %d", sz, i, src, old, old + sz);
+    v.resize(pos + sz);
+    Log_Debug("Reading %d entries from %d (%d); %d -> %d", sz, i, src, pos, pos + sz);
     char* cv = (char*) v.data_ptr();
-    cv = cv + old * v.element_size();
+    cv = cv + pos * v.element_size();
     rpc_->recv_data(src, ep_.tag(), cv, sz * v.element_size());
+    pos += sz;
   }
 }
 

@@ -58,7 +58,7 @@ void test_all_to_one(RPC* rpc) {
 void test_sharded_send(RPC* rpc) {
   Endpoint ep(rpc->first(), rpc->last(), kDefaultTag);
   if (rpc->id() == 0) {
-    Sharded<int> m;
+    ShardedVector<int> m;
     m.resize(100);
     for (int i = 0; i < 100; ++i) {
       m[i] = i;
@@ -66,7 +66,7 @@ void test_sharded_send(RPC* rpc) {
     ShardedComm sc(rpc, ep);
     send(sc, m)->wait();
   } else {
-    Sharded<int> m;
+    ShardedVector<int> m;
     OneComm one(rpc, ep, 0);
     recv(one, m);
 
@@ -84,7 +84,7 @@ void test_sharded_recv(RPC* rpc) {
   ShardCalc sc(100, sizeof(int), ep.count());
 
   if (rpc->id() == 0) {
-    Sharded<int> m;
+    ShardedVector<int> m;
     ShardedComm c(rpc, ep);
     recv(c, m);
     ASSERT_EQ(m.size(), 100);
@@ -92,7 +92,7 @@ void test_sharded_recv(RPC* rpc) {
       ASSERT_EQ(m[i], i);
     }
   } else {
-    Sharded<int> m;
+    ShardedVector<int> m;
     m.resize(sc.num_elems(rpc->id() - 1));
     for (size_t i = 0; i < m.size(); ++i) {
       m[i] = sc.start_elem(rpc->id() - 1) + i;

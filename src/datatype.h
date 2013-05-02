@@ -111,6 +111,9 @@ public:
   virtual Request* send_pod(const void* v, size_t len) {
     RequestGroup *rg = new RequestGroup();
     for (auto d : ep_) {
+      if (d == rpc_->id()) {
+        continue;
+      }
       rg->add(rpc_->send_data(d, ep_.tag(), v, len));
     }
     return rg;
@@ -231,7 +234,7 @@ void recv(Comm& comm, std::vector<V>& v) {
 
 // Like a vector, but should be sharded.
 template<class V>
-class Sharded: public ArrayLike {
+class ShardedVector: public ArrayLike {
 private:
   std::vector<V> m_;
 public:
@@ -268,8 +271,9 @@ public:
   }
 };
 
+
 template<class V>
-Request* send(Comm& comm, const Sharded<V>& v) {
+Request* send(Comm& comm, const ShardedVector<V>& v) {
   if (!boost::is_pod<V>::value) {
     PANIC("Sharding non-pod types not supported.");
   }
@@ -277,9 +281,75 @@ Request* send(Comm& comm, const Sharded<V>& v) {
 }
 
 template<class V>
-void recv(Comm& comm, Sharded<V>& v) {
+void recv(Comm& comm, ShardedVector<V>& v) {
   return comm.recv_array(v);
 }
+
+
+// Wrap a plain C pointer + len with ArrayLike.
+// Ignores resize operations.
+template <class V>
+class FixedArray : public ArrayLike {
+private:
+  V* v_;
+  size_t len_;
+public:
+  FixedArray(V* v, size_t sz) : v_(v), len_(sz) {}
+  void* data_ptr() {
+    return (void*) v_;
+  }
+
+  const void* data_ptr() const {
+    return (void*) v_;
+  }
+
+  const V& operator[](size_t idx) const {
+    return v_[idx];
+  }
+
+  V& operator[](size_t idx) {
+    return v_[idx];
+  }
+
+  void resize(size_t sz) {
+    ASSERT_LE(sz, len_);
+  }
+
+  size_t count() const {
+    return len_;
+  }
+
+  size_t element_size() const {
+    return sizeof(V);
+  }
+};
+
+
+template<class V>
+Request* send(Comm& comm, const FixedArray<V>& v) {
+  if (!boost::is_pod<V>::value) {
+    PANIC("Sharding non-pod types not supported.");
+  }
+  return comm.send_array(v);
+}
+
+template<class V>
+void recv(Comm& comm, FixedArray<V>& v) {
+  return comm.recv_array(v);
+}
+
+
+template <class V>
+Request* send(Comm& comm, const V* v, size_t len) {
+  return send(comm, FixedArray<V>((V*)v, len));
+}
+
+template<class V>
+void recv(Comm& comm, V* v, size_t len) {
+  FixedArray<V> f(v, len);
+  recv(comm, f);
+}
+
 
 template<class K, class V>
 Request* send(Comm& comm, const std::map<K, V>& v) {
