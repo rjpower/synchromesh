@@ -14,29 +14,6 @@ namespace synchromesh {
 
 class RPC;
 
-class ProcessGroup {
-private:
-  std::vector<int> v_;
-public:
-  ProcessGroup(int f, int l) {
-    for (int i = f; i <= l; ++i) {
-      v_.push_back(i);
-    }
-  }
-
-  int count() const {
-    return v_.size();
-  }
-
-  std::vector<int>::const_iterator begin() const {
-    return v_.begin();
-  }
-
-  std::vector<int>::const_iterator end() const {
-    return v_.end();
-  }
-};
-
 class Request {
 public:
   virtual ~Request() {
@@ -73,24 +50,6 @@ public:
     }
     return true;
   }
-};
-
-class ShardCalc {
-private:
-  int num_workers_;
-  int num_elements_;
-  int elem_size_;
-
-public:
-  ShardCalc(int num_elements, int elem_size, const ProcessGroup& group);
-  size_t start_elem(int worker);
-  size_t start_byte(int worker);
-
-  size_t end_elem(int worker);
-  size_t end_byte(int worker);
-
-  size_t num_elems(int worker);
-  size_t num_bytes(int worker);
 };
 
 class RPC {

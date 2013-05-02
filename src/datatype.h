@@ -12,269 +12,259 @@
 //
 // POD (struct, int, float, ...)
 // Fixed size arrays
-// Vectors (resizable)
-// Dictionaries
+// std::vector (resizable)
+// std::map
 namespace synchromesh {
 
-class Marshalled {
-public:
-  typedef boost::shared_ptr<Marshalled> Ptr;
-  virtual ~Marshalled() {
-  }
-  virtual int id() const = 0;
-
-  virtual Request* send(RPC* rpc, int dst, int tag) const = 0;
-  virtual void recv(RPC* rpc, int src, int tag) = 0;
-};
-
-class Shardable {
-public:
-  virtual ~Shardable() {
-
-  }
-
-  // Return a list of 'total' slices for this object.
-  virtual std::vector<Marshalled::Ptr> slice(int total) {
-    std::vector<Marshalled::Ptr> m;
-    for (int i = 0; i < total; ++i) {
-      m.push_back(Marshalled::Ptr(slice(total, i)));
-    }
-    return m;
-  }
-
-  virtual Marshalled* slice(int total, int id) = 0;
-};
-
-class DataRegistry {
-public:
-  typedef Marshalled* (*CreatorFn)();
-  static inline Marshalled* create(int id) {
-    return (*creators_)[id]();
-  }
-  static int register_type(CreatorFn);
+class Endpoint {
 private:
-  typedef std::map<int, DataRegistry::CreatorFn> Map;
-  static int creator_counter_;
-  static Map* creators_;
+  std::vector<int> v_;
+  int tag_;
+public:
+  Endpoint(int f, int l, int tag) {
+    for (int i = f; i <= l; ++i) {
+      v_.push_back(i);
+    }
+
+    tag_ = tag;
+  }
+
+  int tag() const {
+    return tag_;
+  }
+
+  int count() const {
+    return v_.size();
+  }
+
+  std::vector<int>::const_iterator begin() const {
+    return v_.begin();
+  }
+
+  std::vector<int>::const_iterator end() const {
+    return v_.end();
+  }
 };
 
-static inline Request* send(RPC* rpc, int dst, int tag, const Marshalled& v) {
-  send_pod(rpc, dst, tag, v.id());
-  return v.send(rpc, dst, tag);
-}
+class ShardCalc {
+private:
+  int num_workers_;
+  int num_elements_;
+  int elem_size_;
 
-static inline void recv(RPC* rpc, int src, int tag, Marshalled* v) {
-  int id = recv_pod<int>(rpc, src, tag);
-  ASSERT_EQ(id, v->id());
-  v->recv(rpc, src, tag);
-}
+public:
+  ShardCalc(int num_elements, int elem_size, int num_workers);
+  size_t start_elem(int worker);
+  size_t start_byte(int worker);
 
-static inline Marshalled* recv(RPC* rpc, int src, int tag) {
-  int id = recv_pod<int>(rpc, src, tag);
-  Marshalled* m = DataRegistry::create(id);
-  m->recv(rpc, src, tag);
-  return m;
-}
+  size_t end_elem(int worker);
+  size_t end_byte(int worker);
 
-class CommStrategy {
+  size_t num_elems(int worker);
+  size_t num_bytes(int worker);
+};
+
+class Marshalled;
+
+class Comm {
 protected:
-  Marshalled* m_;
+  Endpoint ep_;
+  RPC* rpc_;
 public:
-  typedef boost::shared_ptr<CommStrategy> Ptr;
-  CommStrategy(Marshalled* m) :
-      m_(m) {
+  Comm(RPC* rpc, const Endpoint& ep) : ep_(ep), rpc_(rpc) {}
+  virtual Request* send_pod(const void* v, size_t len) = 0;
+  virtual Request* send_array(const void* v, size_t nelems, size_t elem_size) {
+    return send_pod(v, nelems * elem_size);
   }
 
-  virtual ~CommStrategy() {
-  }
-
-  // Should this return a Request* or block?
-  //
-  //
-  // User code:???
-  // auto r = send(msg1);
-  // recv(msg2);
-  // r.wait();
-  //
-  virtual Request* send(RPC* rpc, const ProcessGroup& g, int tag) = 0;
-  virtual void recv(RPC* rpc, const ProcessGroup& g, int tag) = 0;
-};
-
-CommStrategy::Ptr any(Marshalled*);
-CommStrategy::Ptr all(Marshalled*);
-CommStrategy::Ptr sharded(Shardable*);
-CommStrategy::Ptr one(Marshalled*, int tgt);
-
-template<class T>
-class RegHelper {
-private:
-  static int id_;
-public:
-  static int id() {
-    return id_;
-  }
-
-  static Marshalled* create() {
-    return new T;
+  virtual void recv_pod(void* v, size_t len) = 0;
+  virtual void recv_array(void* v, size_t nelems, size_t elem_size) {
+    return recv_pod(v, nelems * elem_size);
   }
 };
 
-template<class T>
-int RegHelper<T>::id_ = DataRegistry::register_type(&RegHelper<T>::create);
 
-template<class T>
-class PODData: public Marshalled {
-private:
-  T* ptr_;
+class AllComm: public Comm {
 public:
-  int id() const {
-    return RegHelper<PODData<T> >::id();
+  AllComm(RPC* rpc, const Endpoint& ep) : Comm(rpc, ep) {}
+
+  virtual Request* send_pod(const void* v, size_t len) {
+    RequestGroup *rg = new RequestGroup();
+    for (auto d : ep_) { rg->add(rpc_->send_data(d, ep_.tag(), v, len)); }
+    return rg;
   }
 
-  PODData() :
-      ptr_(new T) {
-  }
-
-  PODData(T* v) :
-      ptr_(v) {
-  }
-
-  Request* send(RPC* rpc, int dst, int tag) const {
-    return rpc->send_data(dst, tag, ptr_, sizeof(T));
-  }
-
-  void recv(RPC* rpc, int src, int tag) {
-    rpc->recv_data(src, tag, ptr_, sizeof(T));
+  virtual void recv_pod(void* v, size_t len) {
+    // Recv should either:
+    //  read into a vector or perform a user reduction.
+    PANIC("Not implemented yet.");
   }
 };
 
-template<class T>
-static inline PODData<T>* pod(T* v) {
-  return new PODData<T>(v);
-}
-
-template<class T>
-class Slice: public Marshalled, public Shardable {
+class AnyComm: public Comm {
 private:
-  T* ptr_;
-  size_t num_elems_;
-  bool shardable_;
+  int tgt_;
 public:
-  Slice() :
-      ptr_(NULL), num_elems_(-1), shardable_(false) {
-
+  AnyComm(RPC* rpc, const Endpoint& ep) : Comm(rpc, ep) {}
+  virtual Request* send_pod(const void* v, size_t len) {
+    PANIC("Not implemented.  Who do you want to send to?");
+    return NULL;
   }
 
-  Slice(T* v, int num_elems, bool shardable) :
-      ptr_(v), num_elems_(num_elems), shardable_(shardable) {
-    ASSERT_GT(num_elems_, 0u);
-  }
-
-  static Marshalled* create() {
-    return new Slice<T> ;
-  }
-
-  int id() const {
-    return RegHelper<Slice<T> >::id();
-  }
-
-  Request* send(RPC* rpc, int dst, int tag) const {
-    RequestGroup *g = new RequestGroup;
-    g->add(send_pod(rpc, dst, tag, num_elems_));
-    g->add(rpc->send_data(dst, tag, ptr_, sizeof(T) * num_elems_));
-    return g;
-  }
-
-  void recv(RPC* rpc, int src, int tag) {
-    size_t count = recv_pod<size_t>(rpc, src, tag);
-    ASSERT_EQ(count, num_elems_);
-    rpc->recv_data(src, tag, ptr_, count * num_elems_);
+  virtual void recv_pod(void* v, size_t len) {
+    while (tgt_ == -1) {
+      for (auto proc : ep_) {
+        if (rpc_->poll(proc, ep_.tag())) {
+          tgt_ = proc;
+          break;
+        }
+      }
+    }
+    rpc_->recv_data(tgt_, ep_.tag(), v, len);
   }
 };
 
-template<class T>
-static inline Slice<T>* array(T* v, size_t len) {
-  return new Slice<T>(v, len);
-}
-
-template<class T>
-class VectorData: public Marshalled, public Shardable {
+class OneComm: public Comm {
 private:
-  std::vector<T>* data_;
-  bool own_;
+  int dst_;
 public:
-  VectorData() :
-      data_(new std::vector<T>), own_(true) {
+  OneComm(RPC* rpc, const Endpoint& ep, int dst) : Comm(rpc, ep), dst_(dst) {}
+  virtual Request* send_pod(const void* v, size_t len) {
+    return rpc_->send_data(dst_, ep_.tag(), v, len);
   }
 
-  VectorData(std::vector<T>* d) :
-      data_(d), own_(false) {
-  }
-
-  virtual ~VectorData() {
-    delete data_;
-  }
-
-  int id() const {
-    return RegHelper<VectorData<T> >::id();
-  }
-
-  Request* send(RPC* rpc, int dst, int tag) const {
-    RequestGroup *g = new RequestGroup();
-    g->add(send_pod(rpc, dst, tag, data_->size()));
-    g->add(rpc->send_data(dst, tag, data_->data(), data_->size() * sizeof(T)));
-    return g;
-  }
-
-  void recv(RPC* rpc, int src, int tag) {
-    size_t len = recv_pod<size_t>(rpc, src, tag);
-    data_->resize(len);
-    rpc->recv_data(src, tag, &data_[0], data_->size());
+  virtual void recv_pod(void* v, size_t len) {
+    rpc_->recv_data(dst_, ep_.tag(), v, len);
   }
 };
 
-class SeqMarshalled: public Marshalled {
-private:
-  std::vector<Marshalled*> data_;
+// The 'sharded' comm strategy doesn't actually require the top level object
+// to be marshallable.
+class ShardedComm: public Comm {
 public:
-  SeqMarshalled() {
+  ShardedComm(RPC* rpc, const Endpoint& ep) : Comm(rpc, ep) {}
+  virtual Request* send_pod(const void* v, size_t len) {
+    RequestGroup *rg = new RequestGroup();
+    for (auto d : ep_) {
+      rg->add(rpc_->send_data(d, ep_.tag(), v, len));
+    }
+    return rg;
+  }
+
+  virtual void recv_pod(void* v, size_t len) {
     PANIC("Not implemented.");
+    // rpc_->recv_data(dst_, ep_.tag(), v, len);
   }
-
-  SeqMarshalled(std::vector<Marshalled*>& v) :
-      data_(v) {
-
-  }
-  int id() const {
-    return RegHelper<SeqMarshalled>::id();
-  }
-
-  Request* send(RPC* rpc, int dst, int tag) const {
-    RequestGroup *g = new RequestGroup();
-    g->add(send_pod(rpc, dst, tag, data_.size()));
-
-    for (auto m : data_) {
-      g->add(m->send(rpc, dst, tag));
+  
+  virtual Request* send_array(const void* v, size_t nelems, size_t elem_size) {
+    RequestGroup* rg = new RequestGroup;
+    ShardCalc sc(nelems, elem_size, ep_.count());
+    const char* cv = (char*)v;
+    for (int i = 0; i < ep_.count(); ++i) {
+      int dst = *(ep_.begin() + i);
+      rg->add(rpc_->send_data(dst, ep_.tag(), cv + sc.start_byte(i), sc.num_elems(i)));
     }
-    return g;
+    return rg;
   }
 
-  void recv(RPC* rpc, int src, int tag) {
-    size_t len = recv_pod<size_t>(rpc, src, tag);
-    ASSERT_EQ(len, data_.size());
-    for (auto m : data_) {
-      int id = recv_pod<int>(rpc, src, tag);
-      ASSERT_EQ(id, m->id());
-      m->recv(rpc, src, tag);
+  virtual void recv_array(void* v, size_t nelems, size_t elem_size) {
+    ShardCalc sc(nelems, elem_size, ep_.count());
+    char* cv = (char*)v;
+    for (int i = 0; i < ep_.count(); ++i) {
+      int src = *(ep_.begin() + i);
+      rpc_->recv_data(src, ep_.tag(), cv + sc.start_byte(i), sc.num_elems(i));
     }
   }
 };
 
-static inline SeqMarshalled* seq(Marshalled* a) {
-  std::vector<Marshalled*> v;
-  v.push_back(a);
-  return new SeqMarshalled(v);
+template <class T>
+T recv(Comm* comm) {
+  T v;
+  recv(comm, v);
+  return v;
 }
+
+template <class T>
+void send(Comm* comm, const T& v,
+          typename boost::enable_if<boost::is_pod<T> >::type* = 0) {
+  comm->send_pod(&v, sizeof(v));
+}
+
+template <class T>
+void recv(Comm* comm, T& v,
+          typename boost::enable_if<boost::is_pod<T> >::type* = 0) {
+  comm->recv_pod(&v, sizeof(v));
+}
+
+template <class V>
+void send(Comm* comm, const std::vector<V>& v) {
+  send(comm, v.size());
+  if (boost::is_pod<V>::value) {
+    comm->send_pod(v.data(), v.size() * sizeof(V));
+  } else {
+    for (auto i : v) { 
+      send(comm, i); 
+    }
+  }
+}
+
+template <class V>
+void recv(Comm* comm, std::vector<V>& v) {
+  size_t sz = recv<size_t>(comm);
+  v.resize(sz);
+  if (boost::is_pod<V>::value) {
+    comm->recv_pod(&v[0], v.size() * sizeof(V));
+  } else {
+    for (auto i : v) { 
+      recv(comm, i); 
+    }
+  }
+}
+
+// Like a vector, but should be sharded.
+// TODO - different behavior for shardcomm vs others?
+template <class V>
+class Sharded : public std::vector<V> {
+};
+
+template <class V>
+void send(Comm* comm, const Sharded<V>& v) {
+  if (!boost::is_pod<V>::value) {
+    PANIC("Sharding non-pod types not supported.");
+  }
+  send(comm, v.size());
+  comm->send_array(v.data(), v.size(), sizeof(V));
+}
+
+template <class V>
+void recv(Comm* comm, Sharded<V>& v) {
+  size_t sz = recv<size_t>(comm);
+  v.resize(sz);
+  if (!boost::is_pod<V>::value) {
+    PANIC("Sharding non-pod types not supported.");
+  }
+  comm->recv_array(v.data(), v.size(), sizeof(V));
+}
+
+template <class K, class V>
+void send(Comm* comm, const std::map<K, V>& v) {
+  send(comm, v.size());
+  for (auto i : v) {
+    send(comm, i.first);
+    send(comm, i.second);
+  }
+}
+
+template <class K, class V>
+void recv(Comm* comm, std::map<K, V>& m) {
+  size_t sz = recv<size_t>(comm);
+  for (size_t i = 0; i < sz; ++i) {
+    K k;
+    recv(comm, k);
+    recv(comm, m[k]);
+  }
+}
+
 
 } // namespace synchromesh
 #endif /* SYNC_DATATYPE_H */
