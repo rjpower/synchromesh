@@ -48,15 +48,18 @@ size_t ShardCalc::num_elems(int worker) {
 
 Request* ShardedComm::send_array(const ArrayLike& v) {
   RequestGroup* rg = new RequestGroup;
+  Log_Info("send_array: %d %d", v.count(), ep_.count());
   ShardCalc sc(v.count(), v.element_size(), ep_.count());
   const char* cv = (const char*) (v.data_ptr());
   for (int i = 0; i < ep_.count(); ++i) {
     int dst = *(ep_.begin() + i);
     // skip self.
-    if (dst == rpc_->id()) {
-      continue;
-    }
+//    if (dst == rpc_->id()) {
+//      continue;
+//    }
+
     size_t sz = sc.num_elems(i);
+    Log_Debug("Sending %d entries to %d", sz, dst);
     rg->add(rpc_->send_data(dst, ep_.tag(), &sz, sizeof(size_t)));
     rg->add(rpc_->send_data(dst, ep_.tag(), cv + sc.start_byte(i), sc.num_bytes(i)));
   }
@@ -68,19 +71,18 @@ void ShardedComm::recv_array(ArrayLike& v) {
   for (int i = 0; i < ep_.count(); ++i) {
     int src = *(ep_.begin() + i);
 
-    Log_Debug("Reading... %d %d %d", i, src, rpc_->id());
     // skip self.
-    if (src == rpc_->id()) {
-      continue;
-    }
+//    if (src == rpc_->id()) {
+//      continue;
+//    }
 
     size_t sz;
     rpc_->recv_data(src, ep_.tag(), &sz, sizeof(size_t));
     v.resize(pos + sz);
-    Log_Debug("Reading %d entries from %d (%d); %d -> %d", sz, i, src, pos, pos + sz);
     char* cv = (char*) v.data_ptr();
     cv = cv + pos * v.element_size();
     rpc_->recv_data(src, ep_.tag(), cv, sz * v.element_size());
+    Log_Info("%d: %d entries from %d; %d -> %d", rpc_->id(), sz, src, pos, pos + sz);
     pos += sz;
   }
 }
@@ -89,6 +91,35 @@ void ShardedComm::recv_pod(void* v, size_t len) {
   PANIC("Not implemented.");
   // rpc_->recv_data(dst_, ep_.tag(), v, len);
 }
+
+
+Request* AllComm::send_pod(const void* v, size_t len) {
+  RequestGroup* rg = new RequestGroup();
+  for (auto d : ep_) {
+    Log_Info("%d: sending %d bytes to %d", rpc_->id(), len, d);
+    rg->add(rpc_->send_data(d, ep_.tag(), v, len));
+  }
+  return rg;
+}
+
+void AllComm::recv_pod(void* v, size_t len) {
+  // Recv should either:
+  //  read into a vector or perform a user reduction.
+  PANIC("Not implemented yet.");
+}
+
+void AnyComm::recv_pod(void* v, size_t len) {
+  while (tgt_ == -1) {
+    for (auto proc : ep_) {
+      if (rpc_->poll(proc, ep_.tag())) {
+        tgt_ = proc;
+        break;
+      }
+    }
+  }
+  rpc_->recv_data(tgt_, ep_.tag(), v, len);
+}
+
 
 
 } // namespace synchromesh

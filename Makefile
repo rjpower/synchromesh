@@ -8,7 +8,7 @@ OBJ := $(patsubst src/%.cc,build/%.o,$(SRC))
 TEST_SRC := $(wildcard test/*.cc)
 TESTS := $(patsubst test/%.cc,build/%,$(TEST_SRC))
 
-CFLAGS := -Wall -ggdb2 -pthread -fPIC -Wno-sign-compare
+CFLAGS := -Wall -ggdb2 -pthread -fPIC -Wno-sign-compare -Wno-format
 CXXFLAGS := $(CFLAGS) -std=c++11
 
 OMPI_CXX=clang++

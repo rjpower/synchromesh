@@ -108,22 +108,9 @@ public:
       Comm(rpc, ep) {
   }
 
-  virtual Request* send_pod(const void* v, size_t len) {
-    RequestGroup *rg = new RequestGroup();
-    for (auto d : ep_) {
-      if (d == rpc_->id()) {
-        continue;
-      }
-      rg->add(rpc_->send_data(d, ep_.tag(), v, len));
-    }
-    return rg;
-  }
+  virtual Request* send_pod(const void* v, size_t len);
 
-  virtual void recv_pod(void* v, size_t len) {
-    // Recv should either:
-    //  read into a vector or perform a user reduction.
-    PANIC("Not implemented yet.");
-  }
+  virtual void recv_pod(void* v, size_t len);
 };
 
 class AnyComm: public Comm {
@@ -138,17 +125,7 @@ public:
     return NULL;
   }
 
-  virtual void recv_pod(void* v, size_t len) {
-    while (tgt_ == -1) {
-      for (auto proc : ep_) {
-        if (rpc_->poll(proc, ep_.tag())) {
-          tgt_ = proc;
-          break;
-        }
-      }
-    }
-    rpc_->recv_data(tgt_, ep_.tag(), v, len);
-  }
+  virtual void recv_pod(void* v, size_t len);
 };
 
 class OneComm: public Comm {

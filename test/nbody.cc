@@ -13,8 +13,8 @@ struct Point {
   double z;
 };
 
-static double distance(Point a, Point b) {
-  return sqrt((a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z));
+static double d_squared(Point a, Point b) {
+  return (a.x - b.x) * (a.x - b.x) + (a.y - b.y) * (a.y - b.y) + (a.z - b.z) * (a.z - b.z);
 }
 
 static inline void operator+=(Point& a, const Point& b) {
@@ -33,13 +33,28 @@ static inline Point operator*(const Point& a, double scale) {
   return p;
 }
 
-static const int N = 1000;
-static Point* pts;
-static Point* forces;
+static inline Point operator/(const Point& a, double scale) {
+  Point p = { a.x / scale, a.y / scale, a.z / scale };
+  return p;
+}
+
+static inline double uniform() {
+  return rand() / double(RAND_MAX) * 2.0 - 1.0;
+}
+
+static const double kTimestep = 1e-9;
+static const int kNumRounds = 10;
+static const int kNumPoints = 1000;
+static const int kTag = 1987;
+
+static Point global_pts[kNumPoints];
 
 void runner(RPC* rpc) {
+  Point* pts = new Point[kNumPoints];
+  Point* forces = new Point[kNumPoints];
+
   Log_Info("Running on worker: %d", rpc->id());
-  Endpoint ep(rpc->first(), rpc->last(), 1987); // 1987 as tag
+  Endpoint everyone(rpc->first(), rpc->last(), kTag);
 
   //
   // PHASE 1: GENERATE AND SEND INITIAL LOCATION DATA
@@ -47,81 +62,86 @@ void runner(RPC* rpc) {
 
   if (rpc->id() == 0) {
     // node 0: gen & send data
-    for (int i = 0; i < N; i++) {
-      pts[i].x = rand() / double(RAND_MAX) * 2.0 - 1.0;
-      pts[i].y = rand() / double(RAND_MAX) * 2.0 - 1.0;
-      pts[i].z = rand() / double(RAND_MAX) * 2.0 - 1.0;
+    for (int i = 0; i < kNumPoints; i++) {
+      pts[i] = { uniform(), uniform(), uniform() };
     }
 
+    Endpoint ep(1, rpc->last(), kTag);
     AllComm all(rpc, ep);
-    synchromesh::send(all, pts, N);
+    synchromesh::send(all, pts, kNumPoints);
   } else {
     // node != 0: recv data
-    OneComm one(rpc, ep, 0);
-    synchromesh::recv(one, pts, N);
+    OneComm one(rpc, everyone, 0);
+    synchromesh::recv(one, pts, kNumPoints);
   }
 
   //
   // PHASE 2: N-BODY SIMULATION
   //
-  const double epsilon = 1e-9;
-  const int N_ROUND = 10;
-  ShardCalc shard_calc(N, sizeof(double), ep.count());
+  ShardCalc shard_calc(kNumPoints, sizeof(double), everyone.count());
   const size_t start = shard_calc.start_elem(rpc->id());
   const size_t count = shard_calc.num_elems(rpc->id());
-  for (int round = 0; round < N_ROUND; round++) {
-    for (size_t i = start; i <  start + count; ++i) {
-      forces[i] = { 0, 0, 0 };
+  for (int round = 0; round < kNumRounds; round++) {
+    for (size_t i = start; i < start + count; ++i) {
+      forces[i] = {0, 0, 0};
     }
 
-    for (size_t i = start; i <  start + count; ++i) {
-      for (int j = 0; j < N; ++j) {
-        double dist = distance(pts[i], pts[j]);
-        forces[i] += (pts[i] - pts[j]);
+    for (size_t i = start; i < start + count; ++i) {
+      for (int j = 0; j < kNumPoints; ++j) {
+        if (i == j) {
+          continue;
+        }
+        forces[i] += (pts[i] - pts[j]) / d_squared(pts[i], pts[j]);
       }
     }
 
     // apply forces
-    for (size_t i = start; i <  start + count; ++i) {
-      pts[i] += forces[i] * epsilon;
+    for (size_t i = start; i < start + count; ++i) {
+      pts[i] += forces[i] * kTimestep;
     }
 
     // synchronize
-    AllComm all(rpc, ep);
-    ShardedComm sharded(rpc, ep);
+//    Log_Info("My id: %d, start: %d, count: %d", rpc->id(), start, count);
 
     // Send the updates for my region to everyone
+    AllComm all(rpc, everyone);
     Request* req = synchromesh::send(all, pts + start, count);
 
     // Read in the updates for other regions
-    synchromesh::recv(sharded, pts, N);
+    ShardedComm sharded(rpc, everyone);
+    synchromesh::recv(sharded, pts, kNumPoints);
 
     req->wait();
   }
+
+  // Copy back to the global array for testing.
+  if (rpc->id() == 0) {
+    memcpy(global_pts, pts, sizeof(Point) * kNumPoints);
+  }
+
+  delete[] pts;
+  delete[] forces;
 }
 
 int main(int argc, char** argv) {
-  pts = new Point[N];
-  forces = new Point[N];
-
   // Run with 1 worker to get a reference.
   Log_Info("Running with 1 worker.");
   srand(getpid());
   DummyRPC::run(1, &runner);
-  static Point* reference = new Point[N];
-  memcpy(reference, pts, sizeof(Point) * N);
-
+  static Point* reference = new Point[kNumPoints];
+  memcpy(reference, global_pts, sizeof(Point) * kNumPoints);
   Log_Info("done.");
 
   for (int num_workers = 2; num_workers < 16; num_workers *= 2) {
+    Log_Info("Running with %d workers.", num_workers);
     srand(getpid());
     DummyRPC::run(num_workers, &runner);
-    for (size_t i = 0; i < N; ++i) {
-      ASSERT_EQ(pts[i].x, reference[i].x);
-      ASSERT_EQ(pts[i].y, reference[i].y);
-      ASSERT_EQ(pts[i].z, reference[i].z);
+    for (size_t i = 0; i < kNumPoints; ++i) {
+      Point diff = global_pts[i] - reference[i];
+      ASSERT_LT(fabs(diff.x), 1e-9);
+      ASSERT_LT(fabs(diff.y), 1e-9);
+      ASSERT_LT(fabs(diff.z), 1e-9);
     }
-    ASSERT_EQ(memcmp(reference, pts, sizeof(Point) * N), 0);
   }
 }
 
