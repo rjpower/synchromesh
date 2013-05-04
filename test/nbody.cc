@@ -23,6 +23,11 @@ static inline void operator+=(Point& a, const Point& b) {
   a.z += b.z;
 }
 
+static inline Point operator+(const Point& a, const Point& b) {
+  Point p = { a.x + b.x, a.y + b.y, a.z + b.z };
+  return p;
+}
+
 static inline Point operator-(const Point& a, const Point& b) {
   Point p = { a.x - b.x, a.y - b.y, a.z - b.z };
   return p;
@@ -42,7 +47,14 @@ static inline double uniform() {
   return rand() / double(RAND_MAX) * 2.0 - 1.0;
 }
 
-static const double kTimestep = 1e-9;
+// return unit length vector
+static inline Point normalize(const Point& v) {
+    double vnorm = sqrt(v.x * v.x + v.y * v.y + v.z * v.z);
+    return v / vnorm;
+}
+
+
+static const double kTimestep = 1e-3;
 static const int kNumRounds = 10;
 static const int kNumPoints = 1000;
 static const int kTag = 1987;
@@ -51,7 +63,8 @@ static Point global_pts[kNumPoints];
 
 void runner(RPC* rpc) {
   Point* pts = new Point[kNumPoints];
-  Point* forces = new Point[kNumPoints];
+  Point* accel = new Point[kNumPoints];
+  Point* velocity = new Point[kNumPoints];
 
   Log_Info("Running on worker: %d", rpc->id());
   Endpoint everyone(rpc->first(), rpc->last(), kTag);
@@ -81,9 +94,12 @@ void runner(RPC* rpc) {
   ShardCalc shard_calc(kNumPoints, sizeof(double), everyone.count());
   const size_t start = shard_calc.start_elem(rpc->id());
   const size_t count = shard_calc.num_elems(rpc->id());
+  for (int i = start; i < start + count; ++i) {
+      velocity[i] = {0, 0, 0};
+  }
   for (int round = 0; round < kNumRounds; round++) {
     for (size_t i = start; i < start + count; ++i) {
-      forces[i] = {0, 0, 0};
+      accel[i] = {0, 0, 0};
     }
 
     for (size_t i = start; i < start + count; ++i) {
@@ -91,13 +107,15 @@ void runner(RPC* rpc) {
         if (i == j) {
           continue;
         }
-        forces[i] += (pts[i] - pts[j]) / d_squared(pts[i], pts[j]);
+        // simplified model, assume gravity factor and mass gives us 1.0
+        accel[i] += normalize(pts[i] - pts[j]) / d_squared(pts[i], pts[j]);
       }
     }
 
-    // apply forces
+    // update
     for (size_t i = start; i < start + count; ++i) {
-      pts[i] += forces[i] * kTimestep;
+      pts[i] += velocity[i] * kTimestep + accel[i] * 0.5 * kTimestep * kTimestep;
+      velocity[i] += accel[i] * kTimestep;
     }
 
     // synchronize
@@ -120,7 +138,8 @@ void runner(RPC* rpc) {
   }
 
   delete[] pts;
-  delete[] forces;
+  delete[] accel;
+  delete[] velocity;
 }
 
 int main(int argc, char** argv) {
