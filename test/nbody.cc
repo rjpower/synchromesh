@@ -107,8 +107,8 @@ void runner(RPC* rpc) {
         if (i == j) {
           continue;
         }
-        // simplified model, assume gravity factor and mass gives us 1.0
-        accel[i] += normalize(pts[i] - pts[j]) / d_squared(pts[i], pts[j]);
+        // simplified model, assume (gravity factor * mass) gives us 1.0
+        accel[i] = 1.0 * normalize(pts[i] - pts[j]) / d_squared(pts[i], pts[j]);
       }
     }
 
